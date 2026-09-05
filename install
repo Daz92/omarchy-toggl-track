@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Local install. The supported path for other people is:
+#   omarchy plugin add <git-url> --enable
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+plugins="$HOME/.config/omarchy/plugins"
+id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$root/manifest.json" 2>/dev/null) \
+    || { printf 'Cannot read id from %s/manifest.json\n' "$root" >&2; exit 1; }
+target="$plugins/$id"
+
+dev=0; enable=0; uninstall=0; purge=0; force=0
+for argument in "$@"; do
+    case "$argument" in
+        --dev) dev=1 ;;
+        --enable) enable=1 ;;
+        --uninstall) uninstall=1 ;;
+        --purge) purge=1 ;;
+        --force) force=1 ;;
+        *) printf 'usage: install [--dev] [--enable] [--uninstall [--purge]] [--force]\n' >&2; exit 2 ;;
+    esac
+done
+
+if [ "$uninstall" -eq 1 ]; then
+    if [ "$purge" -eq 1 ]; then
+        # Before the tree goes: running this from the installed copy would
+        # otherwise delete toggl_secret.py and then try to run it. Clear the
+        # item first, then the protected keyring it may have lived in --
+        # deleting the collection first leaves `secret-tool clear` hunting for
+        # an item that is already gone.
+        secret-tool clear service "$id" account api-token >/dev/null 2>&1 || true
+        python3 "$root/toggl_secret.py" delete >/dev/null 2>&1 || true
+    fi
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        # Best-effort: must run before the manifest is gone, and a disable
+        # failure must never abort the removal and strand a half-uninstalled
+        # plugin.
+        omarchy plugin disable "$id" >/dev/null 2>&1 || true
+        rm -rf -- "$target"
+        printf 'Removed %s\n' "$target" >&2
+    else
+        printf 'Nothing installed at %s\n' "$target" >&2
+    fi
+    if [ "$purge" -eq 1 ]; then
+        systemctl --user disable --now omarchy-toggl-track-llama-server.service >/dev/null 2>&1 || true
+        systemctl --user disable --now omarchy-toggl-track-embedder.service >/dev/null 2>&1 || true
+        rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omarchy-toggl-track-llama-server.service"
+        rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omarchy-toggl-track-embedder.service"
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        rm -rf -- "${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-toggl-track"
+        rm -rf -- "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-toggl-track"
+        printf 'Purged the stored token, the cache, the model and the classifier service.\n' >&2
+    fi
+    printf 'Run: omarchy-restart-shell\n' >&2
+    exit 0
+fi
+
+omarchy plugin validate "$root" >/dev/null || {
+    printf 'The source tree failed manifest validation.\n' >&2
+    exit 1
+}
+
+mkdir -p "$plugins"
+if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ "$force" -eq 0 ]; then
+        if [ -L "$target" ]; then
+            printf 'A symlink is already installed at %s -> %s\n' "$target" "$(readlink -- "$target")" >&2
+        else
+            printf 'A directory is already installed at %s\n' "$target" >&2
+        fi
+        printf 'Pass --force to replace it.\n' >&2
+        exit 1
+    fi
+    rm -rf -- "$target"
+fi
+
+if [ "$dev" -eq 1 ]; then
+    ln -s -- "$root" "$target"
+    printf 'Linked %s -> %s\n' "$target" "$root" >&2
+else
+    mkdir -p "$target"
+    git -C "$root" ls-files -z | while IFS= read -r -d '' file; do
+        mkdir -p "$target/$(dirname -- "$file")"
+        cp -p -- "$root/$file" "$target/$file"
+    done
+    printf 'Copied %s files to %s\n' "$(git -C "$root" ls-files | wc -l)" "$target" >&2
+
+    # $target is a real directory here, not the symlink omarchy plugin validate
+    # rejects, so this re-check earns its place: it catches a bad copy that the
+    # pre-check on $root cannot see.
+    omarchy plugin validate "$target" >/dev/null || {
+        printf 'The installed folder failed manifest validation.\n' >&2
+        exit 1
+    }
+fi
+
+if [ "$enable" -eq 1 ]; then
+    omarchy plugin enable "$id" center
+fi
+
+printf '\nNext:\n' >&2
+printf '  ./setup                 store your Toggl API token, then check every dependency\n' >&2
+printf '  omarchy-restart-shell   the panel will not appear until you do\n' >&2
+printf '\nAlready set up? ./setup --check re-runs the dependency checks alone.\n' >&2
+printf '\nNote: reloadConfig keeps the plugin Loader alive, so a panel edit does not\n' >&2
+printf 'appear; rescanPlugins is not in this shell IPC surface and exits 0 regardless.\n' >&2

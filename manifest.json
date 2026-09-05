@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "daz.toggl-track",
+  "name": "Toggl Track",
+  "version": "0.1.0",
+  "author": "daz",
+  "license": "MIT",
+  "description": "Track the work you are doing without leaving the bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Toggl Track",
+    "description": "See, start, and stop Toggl timers from the bar.",
+    "category": "Productivity",
+    "defaultSection": "center",
+    "allowMultiple": false,
+    "defaults": {
+      "workspaceId": 0,
+      "historyDays": 30,
+      "idleReminderMinutes": 0,
+      "dayBlockMinutes": 5,
+      "logLevel": "info",
+      "calendarRange": "fortnight",
+      "calendarDayStart": "auto",
+      "calendarDayEnd": "auto",
+      "classifier": "off"
+    },
+    "schema": [
+      { "key": "workspaceId", "type": "number", "label": "Workspace", "defaultValue": 0 },
+      { "key": "historyDays", "type": "number", "label": "History range (days)", "defaultValue": 30 },
+      { "key": "idleReminderMinutes", "type": "number", "label": "Idle reminder (minutes)", "defaultValue": 0 },
+      { "key": "dayBlockMinutes", "type": "number", "label": "Day: break between blocks (minutes)", "defaultValue": 5 },
+      { "key": "logLevel", "type": "string", "label": "Log detail", "defaultValue": "info" },
+      { "key": "calendarRange", "type": "string", "label": "Calendar range", "defaultValue": "fortnight" },
+      { "key": "calendarDayStart", "type": "string", "label": "Calendar day start", "defaultValue": "auto" },
+      { "key": "calendarDayEnd", "type": "string", "label": "Calendar day end", "defaultValue": "auto" },
+      { "key": "classifier", "type": "string", "label": "Classifier", "defaultValue": "off" }
+    ]
+  }
+}

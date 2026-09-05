@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Release gate. Nothing compiles — QML and Python ship as source. This refuses
+# to tag a version that would not work once cloned.
+set -eu
+
+check_only=0
+case "${1:-}" in
+    --check) check_only=1 ;;
+    "") ;;
+    *) printf 'usage: build [--check]\n' >&2; exit 2 ;;
+esac
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$root"
+step=0
+say() { step=$((step + 1)); printf '[%2d] %s\n' "$step" "$1" >&2; }
+die() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+
+say 'manifest schema'
+omarchy plugin validate . >/dev/null || die 'omarchy plugin validate rejected the manifest'
+
+say 'python syntax'
+python3 -m py_compile toggl_api.py toggl_log.py toggl_perf.py toggl_secret.py toggl_doctor.py \
+    toggl_demo.py tests/*.py || die 'py_compile failed'
+
+say 'python tests'
+python3 -m unittest discover -s tests >/dev/null || die 'python tests failed'
+
+say 'node tests'
+node tests/test_model.mjs >/dev/null || die 'node tests failed'
+
+say 'shell syntax'
+for file in setup build install; do
+    [ -e "$file" ] || continue
+    bash -n "$file" || die "bash -n failed on $file"
+done
+
+say 'qml formatting'
+# Never pipe qmlformat or qmllint and read $? — they write nothing on failure,
+# so `qmllint x.qml | tail` returns tail's status and a broken file reads green.
+for file in Panel.qml ui/*.qml; do
+    [ -e "$file" ] || continue
+    if ! qmlformat "$file" >/dev/null 2>&1; then
+        die "qmlformat rejected $file"
+    fi
+done
+
+say 'BarWidget.qml needs hand review'
+printf '     both QML tools reject `function open(): void`, which IpcHandler requires\n' >&2
+
+say 'nothing unshippable is tracked'
+for pattern in 'logs/' '\.gguf$' '__pycache__/' 'dist/'; do
+    if git ls-files | grep -qE "$pattern"; then
+        die "tracked files match $pattern"
+    fi
+done
+# A Toggl API token is exactly 32 hex characters. Match that length exactly:
+# the 64-hex sha256 that pins the classifier model in `setup` is not a token,
+# and a looser {32} would flag it.
+if git grep -nIE '(^|[^0-9a-f])[0-9a-f]{32}([^0-9a-f]|$)' -- . ':!docs' ':!tests' >/dev/null 2>&1; then
+    die 'a 32-hex string is tracked outside docs and tests; check for a leaked token'
+fi
+
+say 'no unfilled placeholders in what users read'
+# `omarchy plugin add` clones the repo and the README is the first thing anyone
+# reads, so a placeholder URL there ships as an instruction that cannot work.
+# Only a repository with a remote can be installed that way, so the placeholder
+# is a defect from the moment one exists -- and not before.
+if remote=$(git remote get-url origin 2>/dev/null) && [ -n "$remote" ]; then
+    if grep -q '<owner>' README.md HOW-TO.md; then
+        die "README.md or HOW-TO.md still says <owner>; the remote is $remote"
+    fi
+elif grep -q '<owner>' README.md HOW-TO.md; then
+    printf '     README.md still says <owner>; fill it in before publishing\n' >&2
+fi
+
+say 'working tree and version'
+[ -z "$(git status --porcelain)" ] || die 'working tree is dirty'
+version=$(python3 -c 'import json;print(json.load(open("manifest.json"))["version"])')
+if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+    die "v$version is already tagged; bump manifest.json"
+fi
+
+if [ "$check_only" -eq 1 ]; then
+    printf 'OK: v%s passes every check\n' "$version" >&2
+    exit 0
+fi
+
+say 'artifact'
+rm -rf dist
+mkdir -p dist
+name="omarchy-toggl-track-$version"
+git archive --format=tar.gz --prefix="$name/" -o "dist/$name.tar.gz" HEAD
+( cd dist && sha256sum "$name.tar.gz" > SHA256SUMS )
+printf 'OK: dist/%s.tar.gz\n' "$name" >&2

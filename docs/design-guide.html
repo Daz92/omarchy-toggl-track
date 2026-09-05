@@ -1,0 +1,1447 @@
+<title>Three Panels, One Input</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* ------------------------------------------------------------------
+   Omarchy "aether" theme, read from
+   ~/.config/omarchy/themes/aether/{alacritty.toml,walker.css}
+   Sizes from /usr/share/omarchy/shell/Commons/Style.qml
+   Dim tiers = Qt.darker(foreground, N) computed in HSV.
+   ------------------------------------------------------------------ */
+:root {
+  --base:   #1e1e2e;  --mantle: #181825;  --crust:  #11111b;
+  --fg:     #cdd6f4;  --accent: #89b4fa;  --urgent: #f38ba8;
+  --edge:   #585b70;  --ok:     #a6e3a1;  --warn:   #f9e2af;
+  --dim15:  #898fa3;  --dim16:  #808599;  --dim18:  #727788;
+
+  --fill-normal:   rgba(205,214,244,0.04);
+  --fill-hover:    rgba(205,214,244,0.08);
+  --fill-selected: rgba(205,214,244,0.18);
+  --border-normal: rgba(205,214,244,0.40);
+
+  --row-gap: 8px; --panel-gap: 14px; --panel-pad: 18px;
+  --ctl-h: 28px; --ctl-px: 10px; --panel-w: 560px; --radius: 0;
+
+  --f-caption: 10px; --f-body-sm: 11px; --f-body: 12px;
+  --f-subtitle: 13px; --f-title: 14px; --f-display: 24px;
+
+  --mono: "JetBrains Mono", ui-monospace, "JetBrainsMono Nerd Font", monospace;
+  --disp: "Bricolage Grotesque", system-ui, sans-serif;
+
+  /* Toggl project colours come from the server, not the theme.
+     They are the one palette here that a theme must not override. */
+  --p-backend: #0b83d9; --p-docs: #9e5bd9; --p-infra: #e36a00;
+  --p-support: #2da608; --p-admin: #bf7000;
+
+  --z: 1; --gaps: 22px;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--crust);
+  background-image: radial-gradient(120% 90% at 50% -10%, #1b1b29 0%, var(--crust) 62%);
+  background-attachment: fixed;
+  color: var(--fg); font-family: var(--mono); font-size: 13px; line-height: 1.55;
+  margin: 0; padding: 0 var(--gaps) 96px; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { color: var(--fg); background: var(--fill-normal); padding: 0 4px; }
+
+.wrap { max-width: 1180px; margin: 0 auto; }
+.masthead { padding: 56px 0 26px; }
+.kicker { font-size: 11px; letter-spacing: 0.14em; color: var(--dim18);
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.kicker b { color: var(--accent); font-weight: 500; }
+h1 { font-family: var(--disp); font-weight: 800; font-size: clamp(38px, 6.4vw, 76px);
+  line-height: 0.94; letter-spacing: -0.035em; margin: 18px 0 0; text-wrap: balance; }
+h1 em { font-style: normal; color: var(--accent); }
+.standfirst { max-width: 64ch; margin: 20px 0 0; color: var(--dim15);
+  font-size: 13.5px; line-height: 1.75; }
+h2 { font-family: var(--disp); font-weight: 600; letter-spacing: -0.02em;
+  font-size: 15px; margin: 0; color: var(--fg); }
+h3 { font-family: var(--disp); font-weight: 600; font-size: 13px;
+  margin: 0 0 10px; color: var(--fg); letter-spacing: -0.01em; }
+
+/* --------------------------- desktop bar --------------------------- */
+.bar { margin-top: 40px; background: var(--base);
+  border: 1px solid rgba(205,214,244,0.10); display: flex; align-items: center;
+  gap: 2px; padding: 0 6px; height: 34px; font-size: var(--f-body);
+  color: var(--dim15); overflow-x: auto; overflow-y: hidden; }
+.bar::-webkit-scrollbar { height: 0; }
+.bw { padding: 0 8.75px; white-space: nowrap; line-height: 34px; }
+.bar .spacer { flex: 1 1 auto; min-width: 12px; }
+.bw.toggl { color: var(--fg); background: var(--fill-selected);
+  display: inline-flex; align-items: center; gap: 6px; }
+.bw.toggl .dot { width: 7px; height: 7px; background: var(--accent); flex: none; }
+.bw.toggl .t { color: var(--accent); font-weight: 500; font-variant-numeric: tabular-nums; }
+.barcap { font-size: 10.5px; color: var(--dim18); margin-top: 8px;
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+
+/* ---------------------------- toolbar ------------------------------ */
+.toolbar { position: sticky; top: 0; z-index: 40; margin: 34px 0 0; padding: 10px 0;
+  background: linear-gradient(var(--crust) 72%, rgba(17,17,27,0));
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.seg { display: flex; border: 1px solid var(--border-normal); }
+.seg button { font-family: var(--mono); font-size: 11px; color: var(--dim15);
+  background: transparent; border: 0; height: var(--ctl-h); padding: 0 var(--ctl-px); cursor: pointer; }
+.seg button + button { border-left: 1px solid rgba(205,214,244,0.18); }
+.seg button:hover { background: var(--fill-hover); color: var(--fg); }
+.seg button[aria-pressed="true"] { background: var(--fill-selected); color: var(--fg); }
+.seg-label { font-size: 10px; letter-spacing: 0.12em; color: var(--dim18); }
+
+/* ---------------------------- sections ----------------------------- */
+.slab { border: 1px solid rgba(205,214,244,0.13); background: var(--mantle);
+  padding: 22px; margin-top: var(--gaps); }
+.slab.lead { border-color: rgba(137,180,250,0.42); }
+.slab-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.slab-head .num { font-family: var(--disp); font-weight: 800; font-size: 13px;
+  color: var(--accent); letter-spacing: -0.02em; }
+.slab-head .why { margin-left: auto; font-size: 10.5px; color: var(--dim18); }
+.lede { color: var(--dim15); font-size: 12px; max-width: 68ch; margin: 8px 0 20px; line-height: 1.7; }
+.tag { font-size: 10px; letter-spacing: 0.1em; padding: 2px 7px;
+  border: 1px solid var(--border-normal); color: var(--dim15); }
+.tag.rec { border-color: var(--accent); color: var(--accent); }
+.tag.new { border-color: var(--ok); color: var(--ok); }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
+.mocks { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+.mockcol { display: flex; flex-direction: column; gap: 8px; }
+.mocklabel { font-size: 10px; letter-spacing: 0.12em; color: var(--dim18);
+  display: flex; gap: 8px; align-items: baseline; }
+.mocklabel b { color: var(--dim15); font-weight: 400; }
+.note { font-size: 11.5px; color: var(--dim15); line-height: 1.75; max-width: 46ch; }
+.note p { margin: 0 0 12px; }
+.note strong { color: var(--fg); font-weight: 500; }
+.note ul { margin: 0; padding-left: 16px; }
+.note li { margin-bottom: 7px; }
+.note li::marker { color: var(--dim18); }
+
+/* ============================ THE PANEL ============================= */
+.panel { zoom: var(--z); width: var(--panel-w); background: var(--base);
+  border: 1px solid var(--border-normal); border-radius: var(--radius);
+  padding: var(--panel-pad); font-family: var(--mono); font-size: var(--f-body-sm);
+  color: var(--fg); display: flex; flex-direction: column; gap: var(--panel-gap); }
+.panel.coord { border-color: var(--accent); }
+.panel.fluid { width: 100%; min-width: 0; }
+.sep { height: 1px; background: rgba(205,214,244,0.16); }
+
+.running { display: flex; align-items: center; gap: var(--row-gap); font-size: var(--f-body-sm); }
+.running .dot { width: 7px; height: 7px; background: var(--accent); flex: none; }
+.running .desc { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.running .clock { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 500; }
+.running .meta { color: var(--dim18); font-size: var(--f-caption); }
+
+.cmd { display: flex; align-items: center; gap: var(--row-gap); height: var(--ctl-h);
+  padding: 0 var(--ctl-px); background: var(--fill-normal); border: 1px solid var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(137,180,250,0.14); }
+.cmd .chev { color: var(--accent); }
+.cmd .txt { flex: 1 1 auto; white-space: pre; overflow: hidden; }
+.cmd .caret { display: inline-block; width: 6.6px; height: 13px; background: var(--fg);
+  vertical-align: -2px; animation: blink 1.06s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.scope { display: flex; gap: 2px; font-size: var(--f-caption); }
+.scope span { color: var(--dim18); padding: 0 5px; }
+.scope span.on { color: var(--fg); background: var(--fill-selected); }
+.tk-proj { color: var(--accent); } .tk-tag { color: var(--warn); }
+.tk-bill { color: var(--ok); } .ghost { color: var(--dim18); }
+
+.rows { display: flex; flex-direction: column; }
+.row { display: grid; align-items: center; grid-template-columns: 11px 52px 1fr auto;
+  gap: var(--row-gap); height: 22px; padding: 0 2px; font-size: var(--f-body-sm);
+  color: var(--fg); white-space: nowrap; }
+.row .g { color: var(--dim18); text-align: center; }
+.row .verb { color: var(--dim18); font-size: var(--f-caption); letter-spacing: 0.06em; }
+.row .lbl { overflow: hidden; text-overflow: ellipsis; }
+.row .meta { color: var(--dim18); font-size: var(--f-caption); }
+.row .meta .num { color: var(--dim15); font-variant-numeric: tabular-nums; }
+.row.sel { background: var(--fill-selected); }
+.row.sel .g, .row.sel .verb { color: var(--accent); }
+.row:hover:not(.sel) { background: var(--fill-hover); }
+
+.drow { display: grid; align-items: center; grid-template-columns: 11px 36px 34px 1fr auto;
+  gap: var(--row-gap); height: 22px; padding: 0 2px; font-size: var(--f-body-sm); white-space: nowrap; }
+.drow .t { color: var(--dim15); font-variant-numeric: tabular-nums; }
+.drow .d { color: var(--accent); font-variant-numeric: tabular-nums; }
+.drow .lbl { overflow: hidden; text-overflow: ellipsis; }
+.drow .as { color: var(--dim18); font-size: var(--f-caption); }
+.drow.sel { background: var(--fill-selected); }
+.drow:hover:not(.sel) { background: var(--fill-hover); }
+.st-applied .g, .st-applied .lbl, .st-applied .d { color: var(--dim16); }
+.st-ready .g { color: var(--accent); }
+.st-unass .g { color: var(--dim18); } .st-unass .lbl { color: var(--dim15); }
+.st-conf .g, .st-conf .as { color: var(--urgent); }
+.guess { color: var(--warn); font-size: var(--f-caption); }
+
+.dayhead { display: flex; align-items: center; gap: var(--row-gap); font-size: var(--f-body-sm); }
+.dayhead .nav { color: var(--dim15); padding: 0 4px; }
+.dayhead .date { color: var(--fg); font-weight: 500; }
+.dayhead .tot { margin-left: auto; color: var(--accent); font-size: var(--f-title);
+  font-weight: 700; font-variant-numeric: tabular-nums; }
+.dayhead .cnt { color: var(--dim18); font-size: var(--f-caption); letter-spacing: 0.08em; }
+
+/* ---------------- inspect (read-only) vs edit (editable) ------------ */
+/* Left rule is the whole signal: dim = data you can only read,
+   accent = fields that will change what gets written to Toggl. */
+.drawer { margin: 4px 0 6px 19px; padding: 9px 0 9px 12px;
+  display: flex; flex-direction: column; gap: 10px; }
+.drawer.inspect { border-left: 1px solid rgba(205,214,244,0.22); }
+.drawer.edit { border-left: 1px solid var(--accent); }
+
+.factline { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--f-caption);
+  color: var(--dim18); }
+.factline b { color: var(--dim15); font-weight: 400; font-variant-numeric: tabular-nums; }
+.factline .hi { color: var(--fg); }
+
+/* fragment timeline: one tick per focus fragment, across the wall span */
+.timeline { display: flex; gap: 1px; height: 16px; align-items: stretch; }
+.timeline i { display: block; min-width: 1px; opacity: 0.85; }
+.timeline .gap { background: repeating-linear-gradient(90deg,
+  rgba(205,214,244,0.10) 0 1px, transparent 1px 3px); opacity: 1; }
+.tlkey { display: flex; gap: 12px; flex-wrap: wrap; font-size: var(--f-caption); color: var(--dim18); }
+.tlkey span { display: inline-flex; align-items: center; gap: 5px; }
+.tlkey i { width: 7px; height: 7px; display: inline-block; }
+
+.bars { display: flex; flex-direction: column; gap: 3px; }
+.barrow { display: grid; grid-template-columns: 34px 1fr auto; gap: var(--row-gap);
+  align-items: center; font-size: var(--f-caption); }
+.barrow .s { color: var(--dim15); font-variant-numeric: tabular-nums; }
+.barrow .track { height: 7px; background: rgba(205,214,244,0.07); }
+.barrow .track i { display: block; height: 7px; }
+.barrow .n { color: var(--dim15); max-width: 30ch; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.subhead { font-size: var(--f-caption); letter-spacing: 0.12em; color: var(--dim18); }
+
+.field { height: var(--ctl-h); padding: 0 var(--ctl-px); border: 1px solid var(--border-normal);
+  background: var(--fill-normal); display: flex; align-items: center; font-size: var(--f-body-sm); }
+.field.focused { border-color: var(--accent); background: var(--fill-hover); }
+
+.hints { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--f-caption); color: var(--dim18); }
+.hints b { color: var(--dim15); font-weight: 400; }
+.hints .mode { color: var(--accent); letter-spacing: 0.1em; }
+
+/* ------------------------------ calendar ---------------------------- */
+.calgrid { display: grid; grid-template-columns: repeat(7, 1fr) 52px; gap: 4px; }
+.caldow { font-size: var(--f-caption); color: var(--dim18); letter-spacing: 0.1em;
+  text-align: center; padding-bottom: 2px; }
+.calcell { height: 50px; border: 1px solid rgba(205,214,244,0.10);
+  padding: 3px 4px; display: flex; flex-direction: column; gap: 2px; }
+.calcell .n { font-size: var(--f-caption); color: var(--dim18); font-variant-numeric: tabular-nums;
+  display: flex; justify-content: space-between; align-items: center; }
+.calcell .h { font-size: var(--f-body-sm); color: var(--fg); font-variant-numeric: tabular-nums; }
+.calcell .stack { margin-top: auto; display: flex; height: 4px; gap: 1px; }
+.calcell .stack i { display: block; }
+.calcell.out { opacity: 0.32; }
+.calcell.weekend { background: rgba(0,0,0,0.22); }
+.calcell.empty .h { color: var(--dim18); }
+.calcell.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px rgba(137,180,250,0.28); }
+.calcell.sel { background: var(--fill-selected); border-color: var(--accent); }
+.calcell .flag { color: var(--warn); font-size: 9px; }
+.calcell .flag.urg { color: var(--urgent); }
+.calweek { height: 50px; border: 1px solid rgba(205,214,244,0.06); background: rgba(0,0,0,0.18);
+  display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
+  padding: 0 5px; }
+.calweek .wh { font-size: var(--f-body-sm); color: var(--accent); font-variant-numeric: tabular-nums; }
+.calweek .wl { font-size: 9px; color: var(--dim18); letter-spacing: 0.08em; }
+
+/* range chips: W / 2W / M — each range trades cells for detail */
+.rangechips { display: flex; gap: 2px; font-size: var(--f-caption); margin-left: auto; }
+.rangechips span { color: var(--dim18); padding: 1px 6px; border: 1px solid transparent; }
+.rangechips span.on { color: var(--fg); background: var(--fill-selected); border-color: var(--border-normal); }
+
+/* week: a real time grid, because at 7 cells a day can afford one */
+.wkgrid { display: grid; grid-template-columns: 26px repeat(7, 1fr); gap: 2px; }
+.wkdow { font-size: var(--f-caption); color: var(--dim18); letter-spacing: 0.08em;
+  text-align: center; padding-bottom: 3px; }
+.wkdow b { color: var(--dim15); font-weight: 400; }
+.wkdow.today b { color: var(--accent); }
+.wkhours { position: relative; height: 156px; }
+.wkhours span { position: absolute; right: 4px; font-size: 9px; color: var(--dim18);
+  transform: translateY(-4px); font-variant-numeric: tabular-nums; }
+.wkcol { position: relative; height: 156px; background: rgba(0,0,0,0.20);
+  background-image: repeating-linear-gradient(180deg,
+    rgba(205,214,244,0.07) 0 1px, transparent 1px 13px); }
+.wkcol.today { background-color: rgba(137,180,250,0.06); }
+.wkcol.empty { background-image: none; background-color: rgba(0,0,0,0.28); }
+.wkev { position: absolute; left: 0; right: 0; overflow: hidden; font-size: 9px;
+  line-height: 1.15; padding: 1px 3px; color: #0d1016; }
+.wkev.conflict { background: transparent !important;
+  border: 1px solid var(--urgent); color: var(--urgent);
+  background-image: repeating-linear-gradient(45deg,
+    rgba(243,139,168,0.18) 0 3px, transparent 3px 6px) !important; }
+.wkev.unass { background: transparent !important; color: var(--dim15);
+  border: 1px dashed rgba(205,214,244,0.35); }
+.wktot { display: grid; grid-template-columns: 26px repeat(7, 1fr); gap: 2px; margin-top: 3px; }
+.wktot div { font-size: var(--f-caption); text-align: center; color: var(--dim15);
+  font-variant-numeric: tabular-nums; }
+.wktot div.zero { color: var(--dim18); }
+
+/* two weeks: no room for a time axis, so each day gets a density strip */
+.fncell { height: 66px; border: 1px solid rgba(205,214,244,0.10); padding: 3px 4px;
+  display: flex; flex-direction: column; gap: 3px; }
+.fncell .n { font-size: var(--f-caption); color: var(--dim18);
+  display: flex; justify-content: space-between; align-items: center; font-variant-numeric: tabular-nums; }
+.fncell .h { font-size: var(--f-body-sm); color: var(--fg); font-variant-numeric: tabular-nums; }
+.fncell .strip { margin-top: auto; display: flex; gap: 1px; height: 9px; }
+.fncell .strip i { display: block; }
+.fncell .strip i.gapx { background: repeating-linear-gradient(90deg,
+  rgba(205,214,244,0.10) 0 1px, transparent 1px 3px); }
+.fncell.weekend { background: rgba(0,0,0,0.22); }
+.fncell.empty .h { color: var(--dim18); }
+.fncell.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px rgba(137,180,250,0.28); }
+.fncell .flag { color: var(--warn); font-size: 9px; }
+.fncell .flag.urg { color: var(--urgent); }
+
+.floor { display: flex; align-items: center; gap: 8px; font-size: var(--f-caption);
+  color: var(--dim18); }
+.floor .bad { color: var(--urgent); }
+.navoff { color: rgba(205,214,244,0.18) !important; }
+
+/* ------------------------ token annotations ------------------------ */
+.tok { display: none; font-family: var(--mono); font-size: 9px;
+  color: var(--accent); background: rgba(137,180,250,0.10);
+  border-left: 2px solid var(--accent); padding: 1px 5px; margin-top: 3px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+body.tokens .tok { display: block; }
+body.tokens .panel { outline: 1px dashed rgba(137,180,250,0.18); outline-offset: 3px; }
+
+/* ------------------------------ tables ----------------------------- */
+.scroll { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.tbl th { text-align: left; font-weight: 400; color: var(--dim18); font-size: 10px;
+  letter-spacing: 0.12em; padding: 0 12px 8px 0; border-bottom: 1px solid rgba(205,214,244,0.13); }
+.tbl td { padding: 8px 12px 8px 0; border-bottom: 1px solid rgba(205,214,244,0.06); vertical-align: top; }
+.tbl td.k { color: var(--accent); white-space: nowrap; }
+.tbl td.v { color: var(--dim15); }
+.tbl td.n { color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl td.id { color: var(--dim18); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sev { display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: 1px; }
+.sev.hi { background: var(--urgent); } .sev.md { background: var(--warn); } .sev.lo { background: var(--dim18); }
+
+.callout { border-left: 2px solid var(--warn); background: rgba(249,226,175,0.05);
+  padding: 12px 16px; font-size: 11.5px; color: var(--dim15); line-height: 1.75; margin-top: 18px; }
+.callout b { color: var(--warn); font-weight: 500; }
+.callout.urg { border-left-color: var(--urgent); background: rgba(243,139,168,0.05); }
+.callout.urg b { color: var(--urgent); }
+.callout.ok { border-left-color: var(--ok); background: rgba(166,227,161,0.05); }
+.callout.ok b { color: var(--ok); }
+
+pre.code { margin: 0; padding: 12px 14px; background: var(--base);
+  border: 1px solid rgba(205,214,244,0.13); overflow-x: auto;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.7; color: var(--dim15); }
+pre.code b { color: var(--fg); font-weight: 400; }
+pre.code .s { color: var(--ok); } pre.code .k { color: var(--accent); }
+pre.code .c { color: var(--dim18); }
+
+/* ring buffer diagram: age is the primary bound, size the backstop */
+.ring { display: flex; height: 34px; border: 1px solid rgba(205,214,244,0.13); }
+.ring div { display: flex; align-items: center; justify-content: center;
+  font-size: 9px; letter-spacing: 0.06em; }
+.ring .drop { flex: 2; background: repeating-linear-gradient(45deg,
+  rgba(243,139,168,0.16) 0 4px, transparent 4px 8px); color: var(--urgent); }
+.ring .keep { flex: 7; background: rgba(137,180,250,0.12); color: var(--accent); }
+.ring .head { flex: 1; background: var(--fill-selected); color: var(--fg); }
+
+.swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+.sw { border: 1px solid rgba(205,214,244,0.13); padding: 8px 10px; min-width: 128px; }
+.sw .chip { height: 24px; margin-bottom: 7px; border: 1px solid rgba(205,214,244,0.10); }
+.sw .nm { font-size: 10px; color: var(--dim15); }
+.sw .hx { font-size: 10px; color: var(--dim18); }
+
+.states { display: flex; flex-direction: column; gap: 13px; }
+.state-line { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.state-line .desc { font-size: 11px; color: var(--dim15); max-width: 46ch; }
+.state-demo { width: 300px; flex: none; background: var(--base);
+  border: 1px solid var(--border-normal); padding: 6px 8px; }
+
+footer { margin-top: 48px; padding-top: 22px; border-top: 1px solid rgba(205,214,244,0.13);
+  font-size: 11px; color: var(--dim18); display: flex; gap: 22px; flex-wrap: wrap; }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media (max-width: 720px) { :root { --gaps: 14px; } .slab { padding: 14px; } .mocks { overflow-x: auto; } }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="kicker">
+      <span>omarchy-toggl-track</span><span>·</span>
+      <span>theme <b>aether</b></span><span>·</span>
+      <span>Panel.qml 1525 · toggl_api.py 1408 · Model.js 279</span>
+    </div>
+    <h1>Three panels,<br>one <em>input</em>.</h1>
+    <p class="standfirst">
+      Unified palette, built out. <b style="color:var(--fg)">TIMER</b>,
+      <b style="color:var(--fg)">DAY</b> and <b style="color:var(--fg)">CALENDAR</b> are scopes on
+      one command line, not tabs. Day rows now open two ways — <b style="color:var(--fg)">inspect</b>
+      to read what happened, <b style="color:var(--fg)">edit</b> to change what gets written.
+      Every value below is read from the live theme and <code>Style.qml</code>.
+      Below the design: two audits — theme coordination against the built-in plugins, and the
+      backend — then the 24-hour log, and what the repo needs before it can be shared.
+    </p>
+
+    <div class="bar" role="img" aria-label="Omarchy top bar with the Toggl Track widget running">
+      <span class="bw">󰀻 menu</span><span class="bw">1 2 3</span>
+      <span class="spacer"></span>
+      <span class="bw">weather 21°</span><span class="bw">Madrid 14:22</span>
+      <span class="bw toggl"><span class="dot"></span><span class="t">1:23:45</span> Refactor day segm…</span>
+      <span class="spacer"></span>
+      <span class="bw">jira</span><span class="bw">tailscale</span><span class="bw">99%</span>
+    </div>
+    <div class="barcap">
+      <span>widget as it renders today —</span>
+      <span style="color:var(--dim15)">barLabel = elapsed + compactDescription(desc, 24)</span>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <span class="seg-label">SCALE</span>
+    <div class="seg" role="group" aria-label="Panel scale">
+      <button type="button" data-z="1" aria-pressed="true">1×&nbsp;true size</button>
+      <button type="button" data-z="1.6" aria-pressed="false">1.6×</button>
+      <button type="button" data-z="2.2" aria-pressed="false">2.2×</button>
+    </div>
+    <span class="seg-label" style="margin-left:8px">ANNOTATE</span>
+    <div class="seg"><button type="button" id="tokbtn" aria-pressed="false">show Style tokens</button></div>
+    <div class="seg"><button type="button" id="typebtn">type into the command line</button></div>
+  </div>
+
+  <!-- =============================================================
+       01 · TIMER SCOPE
+       ============================================================= -->
+  <section class="slab lead">
+    <div class="slab-head">
+      <span class="num">01</span><h2>Timer scope</h2>
+      <span class="tag rec">CHOSEN</span>
+      <span class="why">panel opens with the input focused · common path never touches the mouse</span>
+    </div>
+    <p class="lede">
+      Six clicks become zero. The token line replaces two <code>SearchableDropdown</code>s, a
+      <code>MultiSelect</code> and a <code>Toggle</code>; completion runs against data already in
+      memory, so no keystroke starts a <code>Process</code>.
+    </p>
+    <p class="note-inline" style="max-width:640px"><strong>Chrome shares the command row.</strong> The panel's three action
+      buttons — refresh, settings, open Toggl web (16&nbsp;px, <code>PanelActionButton</code>) — sit to the right of the
+      <code>.cmd</code> box on the same row, in every scope; nothing sits above <code>.cmd</code> except the day header
+      (day scope) or the running strip (timer scope). The mocks below omit the three buttons. Ruling R-AI.</p>
+    <div class="mocks">
+      <div class="mockcol">
+        <div class="mocklabel"><b>TIMER</b> · running · input mid-token</div>
+        <div class="panel coord">
+          <div class="running">
+            <span class="dot"></span><span class="clock">1:23:45</span>
+            <span class="desc">Refactor day segmentation</span>
+            <span class="meta">acme · backend</span>
+          </div>
+          <div class="tok">RowLayout · rowGap 8 · Color.accent</div>
+          <div class="sep"></div>
+          <div class="cmd">
+            <span class="chev">›</span>
+            <span class="txt" id="cmdtext">refactor <span class="tk-proj">@acme/back</span><span class="ghost">end</span></span><span class="caret"></span>
+            <span class="scope"><span class="on">timer</span><span>day</span><span>cal</span></span>
+          </div>
+          <div class="tok">TextField · controlHeight 28 · controlPaddingX 10 · focus Color.accent</div>
+          <div class="rows" id="cmdrows">
+            <div class="row sel"><span class="g">↵</span><span class="verb">START</span><span class="lbl">refactor</span><span class="meta">acme · backend</span></div>
+            <div class="row"><span class="g">⟲</span><span class="verb">CONT</span><span class="lbl">Refactor day segmentation</span><span class="meta">acme · backend &nbsp;<span class="num">2h25</span></span></div>
+            <div class="row"><span class="g">⟲</span><span class="verb">CONT</span><span class="lbl">Refactor block prep</span><span class="meta">acme · backend &nbsp;<span class="num">45m</span></span></div>
+            <div class="row"><span class="g">▤</span><span class="verb">PROJ</span><span class="lbl">acme / backend</span><span class="meta">12 entries</span></div>
+            <div class="row"><span class="g">◷</span><span class="verb">BLOCK</span><span class="lbl">09:20 Refactor day segmentation</span><span class="meta"><span class="num">2h25</span> &nbsp;today</span></div>
+          </div>
+          <div class="tok">Repeater · 22px rows · selected fill = Style.selectedFill</div>
+          <div class="sep"></div>
+          <div class="hints"><span><b>↵</b> act</span><span><b>⇥</b> complete</span><span><b>^j/^k</b> move</span><span><b>^d</b> day</span><span><b>^l</b> calendar</span><span><b>esc</b> close</span></div>
+        </div>
+      </div>
+      <div class="note">
+        <p><strong>Three scopes, one field.</strong> The scope chips on the right of the input show where you are. <code>^d</code> and <code>^l</code> jump; typing filters within the current scope, and results from other scopes still appear underneath when they match.</p>
+        <p><strong>Deleted from the current panel:</strong></p>
+        <ul>
+          <li><code>searchMode</code> — declared, never wired to a control</li>
+          <li>the 󰍉 search button and its three-click detour</li>
+          <li>the search dropdown stranded below <em>Billable</em></li>
+          <li>PROJECT / TASK / TAGS / Billable as always-visible controls</li>
+          <li>the TIMER/DAY <code>ButtonGroup</code>, unreachable by keyboard because <code>onTabRequested</code> belongs to Omarchy</li>
+        </ul>
+        <div class="callout ok" style="margin-top:16px">
+          <b>Sigils.</b> <code>@project</code>, <code>@project/task</code>, <code>#tag</code>,
+          <code>$</code> for billable, everything else is the description. An unmatched
+          <code>@</code> stays plain text and never silently drops — the row says
+          <em>no project</em> rather than guessing.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============================================================
+       02 · DAY SCOPE
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head">
+      <span class="num">02</span><h2>Day scope</h2>
+      <span class="why">rows stay one line · no accordion · two drawers</span>
+    </div>
+    <p class="lede">
+      Six states, one line each. The count line separates what is done from what is waiting
+      and what can never be written.
+    </p>
+    <div class="mocks">
+      <div class="mockcol">
+        <div class="mocklabel"><b>DAY</b> · after classify · cursor on row 3</div>
+        <div class="panel coord">
+          <div class="dayhead">
+            <span class="nav">‹</span><span class="date">Wed 3 Sep</span><span class="nav">›</span>
+            <span class="cnt" style="margin-left:auto">2 APPLIED · 2 READY · 1 UNASSIGNED · 1 CONFLICT</span>
+            <span class="tot" style="margin-left:4px">8h05</span>
+          </div>
+          <div class="tok">Model.blockSummary() · Style.font.title 14 · Color.accent</div>
+          <div class="sep"></div>
+          <div class="cmd">
+            <span class="chev">›</span><span class="txt ghost">filter blocks</span>
+            <span class="scope"><span>timer</span><span class="on">day</span><span>cal</span></span>
+          </div>
+          <div class="rows">
+            <div class="drow st-applied"><span class="g">✓</span><span class="t">08:10</span><span class="d">1h05</span><span class="lbl">Morning triage</span><span class="as">acme · backend</span></div>
+            <div class="drow st-applied"><span class="g">✓</span><span class="t">09:20</span><span class="d">2h25</span><span class="lbl">Refactor day segmentation</span><span class="as">acme · backend</span></div>
+            <div class="drow st-ready sel"><span class="g">●</span><span class="t">11:50</span><span class="d">0h50</span><span class="lbl">Reviewing PRs</span><span class="as">acme · backend <span class="guess">~</span></span></div>
+            <div class="drow st-ready"><span class="g">●</span><span class="t">12:45</span><span class="d">1h10</span><span class="lbl">Spec writing</span><span class="as">acme · docs <span class="guess">~</span></span></div>
+            <div class="drow st-unass"><span class="g">◌</span><span class="t">14:05</span><span class="d">0h35</span><span class="lbl">Slack, Bitbucket</span><span class="as">— unassigned —</span></div>
+            <div class="drow st-conf"><span class="g">▲</span><span class="t">14:45</span><span class="d">2h00</span><span class="lbl">Standup + planning</span><span class="as">conflict · manual</span></div>
+          </div>
+          <div class="tok">state ← Model.prepareBlocks() · conflict = foreign created_with, never overwritten</div>
+          <div class="sep"></div>
+          <div class="hints">
+            <span><b>space</b> inspect</span><span><b>e</b> edit</span><span><b>↵</b> apply</span>
+            <span><b>⇧↵</b> apply ready · 2</span><span><b>⌫</b> skip</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <p><strong><code>space</code> and <code>e</code> are different doors.</strong> One shows you what the machine recorded. The other changes what will be written to Toggl. Mixing them was the mistake in the current panel, where the only expansion drops you straight into a text field.</p>
+        <p><strong>Rows no longer collapse each other.</strong> <code>toggleBlock()</code> currently closes every sibling, so comparing two blocks means clicking four times. Any number of drawers can stay open.</p>
+        <p><strong>Apply stays explicit.</strong> A guessed row carries <code>~</code> until you touch it. <code>⇧↵</code> applies only rows that are ready, never guesses you have not confirmed.</p>
+        <div class="callout">
+          <b>One request at a time.</b> <code>request()</code> returns early when
+          <code>requestPending</code> is set, so batch apply drains <code>applyQueue</code>
+          one row at a time. The row in flight says so; the panel does not freeze.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============================================================
+       03 · INSPECT vs EDIT
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head">
+      <span class="num">03</span><h2>Inspect, then edit</h2>
+      <span class="tag new">NEW</span>
+      <span class="why">read-only drawer · dim rule means nothing here writes</span>
+    </div>
+    <p class="lede">
+      The left rule is the entire signal. <b style="color:var(--dim15)">Dim</b> means every
+      value in the drawer is a fact about what happened.
+      <b style="color:var(--accent)">Accent</b> means the drawer holds fields that change
+      what reaches Toggl. No control in the inspect drawer is focusable.
+    </p>
+    <div class="mocks">
+
+      <div class="mockcol">
+        <div class="mocklabel"><b>space</b> · inspect · read only</div>
+        <div class="panel coord">
+          <div class="rows">
+            <div class="drow st-applied"><span class="g">✓</span><span class="t">08:10</span><span class="d">1h05</span><span class="lbl">Morning triage</span><span class="as">acme · backend</span></div>
+            <div class="drow st-applied sel"><span class="g">✓</span><span class="t">09:20</span><span class="d">2h25</span><span class="lbl">Refactor day segmentation</span><span class="as">acme · backend</span></div>
+          </div>
+
+          <div class="drawer inspect">
+            <div class="factline">
+              <span><b class="hi">2h25</b> active</span>
+              <span><b>2h41</b> wall</span>
+              <span><b>16m</b> idle removed</span>
+              <span><b>63</b> switches</span>
+              <span>longest run <b>11m</b></span>
+            </div>
+
+            <div class="timeline" aria-label="Fragment timeline across the block">
+              <i style="flex:14;background:var(--p-backend)"></i>
+              <i style="flex:3;background:var(--p-docs)"></i>
+              <i style="flex:9;background:var(--p-backend)"></i>
+              <i style="flex:2;background:var(--p-support)"></i>
+              <i class="gap" style="flex:6"></i>
+              <i style="flex:18;background:var(--p-backend)"></i>
+              <i style="flex:4;background:var(--p-docs)"></i>
+              <i style="flex:2;background:var(--p-support)"></i>
+              <i style="flex:11;background:var(--p-backend)"></i>
+              <i class="gap" style="flex:4"></i>
+              <i style="flex:7;background:var(--p-docs)"></i>
+              <i style="flex:13;background:var(--p-backend)"></i>
+            </div>
+            <div class="tlkey">
+              <span><i style="background:var(--p-backend)"></i>Zed</span>
+              <span><i style="background:var(--p-docs)"></i>Zen</span>
+              <span><i style="background:var(--p-support)"></i>Slack</span>
+              <span><i class="gap" style="background:rgba(205,214,244,0.12)"></i>idle, removed</span>
+            </div>
+            <div class="tok">needs span_seconds + per-fragment ticks · not returned today</div>
+
+            <div class="subhead">TOPICS</div>
+            <div class="bars">
+              <div class="barrow"><span class="s">1h12</span><span class="track"><i style="width:50%;background:var(--p-backend)"></i></span><span class="n">segment_blocks — toggl_api.py</span></div>
+              <div class="barrow"><span class="s">0h38</span><span class="track"><i style="width:26%;background:var(--p-backend)"></i></span><span class="n">nx8-server — Bitbucket</span></div>
+              <div class="barrow"><span class="s">0h21</span><span class="track"><i style="width:14%;background:var(--p-docs)"></i></span><span class="n">Toggl API reference</span></div>
+              <div class="barrow"><span class="s">0h14</span><span class="track"><i style="width:10%;background:var(--p-support)"></i></span><span class="n">Slack · #eng</span></div>
+            </div>
+
+            <div class="subhead">APPS</div>
+            <div class="bars">
+              <div class="barrow"><span class="s">1h34</span><span class="track"><i style="width:65%;background:rgba(205,214,244,0.34)"></i></span><span class="n">dev.zed.Zed</span></div>
+              <div class="barrow"><span class="s">0h37</span><span class="track"><i style="width:26%;background:rgba(205,214,244,0.34)"></i></span><span class="n">zen</span></div>
+              <div class="barrow"><span class="s">0h14</span><span class="track"><i style="width:9%;background:rgba(205,214,244,0.34)"></i></span><span class="n">Slack</span></div>
+            </div>
+            <div class="tok">apps[] carries no seconds today — name list only</div>
+
+            <div class="subhead">DOMAINS</div>
+            <div class="bars">
+              <div class="barrow"><span class="s">0h29</span><span class="track"><i style="width:47%;background:rgba(137,180,250,0.45)"></i></span><span class="n">bitbucket.org</span></div>
+              <div class="barrow"><span class="s">0h21</span><span class="track"><i style="width:34%;background:rgba(137,180,250,0.45)"></i></span><span class="n">engineering.toggl.com</span></div>
+              <div class="barrow"><span class="s">0h12</span><span class="track"><i style="width:19%;background:rgba(137,180,250,0.45)"></i></span><span class="n">github.com</span></div>
+            </div>
+            <div class="tok">domains map is computed then discarded — only max() survives</div>
+
+            <div class="factline" style="margin-top:2px">
+              <span>written as entry <b>#3901284471</b></span>
+              <span>created_with <b>omarchy-toggl-track/day</b></span>
+            </div>
+          </div>
+
+          <div class="rows">
+            <div class="drow st-ready"><span class="g">●</span><span class="t">11:50</span><span class="d">0h50</span><span class="lbl">Reviewing PRs</span><span class="as">acme · backend <span class="guess">~</span></span></div>
+          </div>
+          <div class="sep"></div>
+          <div class="hints"><span class="mode">INSPECT</span><span><b>e</b> switch to edit</span><span><b>space</b> close</span><span><b>^j/^k</b> next block</span></div>
+        </div>
+      </div>
+
+      <div class="mockcol">
+        <div class="mocklabel"><b>e</b> · edit · writes on ↵</div>
+        <div class="panel coord">
+          <div class="rows">
+            <div class="drow st-applied"><span class="g">✓</span><span class="t">09:20</span><span class="d">2h25</span><span class="lbl">Refactor day segmentation</span><span class="as">acme · backend</span></div>
+            <div class="drow st-unass sel"><span class="g">◌</span><span class="t">14:05</span><span class="d">0h35</span><span class="lbl">Slack, Bitbucket</span><span class="as">— unassigned —</span></div>
+          </div>
+          <div class="drawer edit">
+            <div class="field focused"><span>Slack, Bitbucket</span><span class="caret" style="margin-left:1px"></span></div>
+            <div class="field"><span class="tk-proj">@acme/backend</span></div>
+            <div class="factline">
+              <span>0h35 active</span><span>0h35 wall</span><span>9 switches</span>
+              <span class="hi">writes a completed entry · never touches the running timer</span>
+            </div>
+          </div>
+          <div class="tok">create_entry · not start/continue — those stop the running timer</div>
+          <div class="rows">
+            <div class="drow st-conf"><span class="g">▲</span><span class="t">14:45</span><span class="d">2h00</span><span class="lbl">Standup + planning</span><span class="as">conflict · manual</span></div>
+          </div>
+          <div class="sep"></div>
+          <div class="hints"><span class="mode">EDIT</span><span><b>↵</b> save + apply</span><span><b>space</b> back to inspect</span><span><b>esc</b> close</span></div>
+        </div>
+        <div class="note" style="max-width:560px;margin-top:6px">
+          <p><strong>Inspect is the default door.</strong> Most of the time you are checking, not correcting — so the cheap key shows facts, and editing is the deliberate second step.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- =============================================================
+       04 · CALENDAR SCOPE
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head">
+      <span class="num">04</span><h2>Calendar scope</h2>
+      <span class="tag new">NEW</span><span class="tag">W · 2W · M</span>
+      <span class="why">one click into any day · hard-stopped at Toggl's 91-day floor</span>
+    </div>
+    <p class="lede">
+      Three ranges — <b style="color:var(--fg)">W</b>, <b style="color:var(--fg)">2W</b>,
+      <b style="color:var(--fg)">M</b> — and they are not the same grid at three sizes.
+      Fewer cells buys more room per day, so each range shows what actually fits:
+      a real time axis at a week, a density strip at two, a total and a colour stack at a month.
+      Project colours come from Toggl, not the theme, so a month reads the same as the web app.
+      Selecting a day switches to Day scope for that date.
+    </p>
+
+    <div class="mocks">
+
+      <div class="mockcol">
+        <div class="mocklabel"><b>W</b> · 31 Aug – 6 Sep · entries in real time positions</div>
+        <div class="panel coord">
+          <div class="dayhead">
+            <span class="nav">‹</span><span class="date">31 Aug – 6 Sep</span><span class="nav">›</span>
+            <span class="rangechips"><span class="on">W</span><span>2W</span><span>M</span></span>
+            <span class="tot" style="margin-left:12px">32h00</span>
+          </div>
+          <div class="floor">
+            <span>axis <b style="color:var(--dim15)">08:00–19:00</b></span>
+            <span>·</span>
+            <span>automatic, from your tracked hours</span>
+            <span style="margin-left:auto;color:var(--dim15)">a</span>
+          </div>
+          <div class="sep"></div>
+          <div class="wkgrid">
+            <div></div>
+            <div class="wkdow"><b>MON</b> 31</div><div class="wkdow"><b>TUE</b> 1</div>
+            <div class="wkdow"><b>WED</b> 2</div><div class="wkdow today"><b>THU</b> 3</div>
+            <div class="wkdow"><b>FRI</b> 4</div><div class="wkdow"><b>SAT</b> 5</div>
+            <div class="wkdow"><b>SUN</b> 6</div>
+
+            <div class="wkhours">
+              <span style="top:0">08</span><span style="top:26px">10</span>
+              <span style="top:52px">12</span><span style="top:78px">14</span>
+              <span style="top:104px">16</span><span style="top:130px">18</span>
+            </div>
+
+            <div class="wkcol">
+              <div class="wkev" style="top:13px;height:45.5px;background:var(--p-backend)">Refactor day segm</div>
+              <div class="wkev" style="top:71.5px;height:45.5px;background:var(--p-backend)">Block prep</div>
+            </div>
+            <div class="wkcol">
+              <div class="wkev" style="top:6.5px;height:45.5px;background:var(--p-backend)">segment_blocks</div>
+              <div class="wkev" style="top:65px;height:47.7px;background:var(--p-docs)">Spec writing</div>
+            </div>
+            <div class="wkcol">
+              <div class="wkev" style="top:13px;height:52px;background:var(--p-backend)">Reviewing PRs</div>
+              <div class="wkev" style="top:78px;height:57.4px;background:var(--p-infra)">Runner migration</div>
+            </div>
+            <div class="wkcol today">
+              <div class="wkev" style="top:2.2px;height:14.1px;background:var(--p-backend)">Morning triage</div>
+              <div class="wkev" style="top:17.3px;height:31.4px;background:var(--p-backend)">Refactor day segm</div>
+              <div class="wkev" style="top:50.1px;height:10.8px;background:var(--p-backend)">Reviewing PRs</div>
+              <div class="wkev" style="top:61.8px;height:15.2px;background:var(--p-docs)">Spec writing</div>
+              <div class="wkev unass" style="top:79px;height:7.6px">◌</div>
+              <div class="wkev conflict" style="top:87.8px;height:26px">Standup</div>
+            </div>
+            <div class="wkcol empty"></div>
+            <div class="wkcol">
+              <div class="wkev" style="top:26px;height:17.3px;background:var(--p-infra)">Backups</div>
+            </div>
+            <div class="wkcol empty"></div>
+          </div>
+          <div class="wktot">
+            <div></div>
+            <div>7h00</div><div>7h10</div><div>8h25</div><div style="color:var(--accent)">8h05</div>
+            <div class="zero">—</div><div>1h20</div><div class="zero">—</div>
+          </div>
+          <div class="tok">12 hour rows × 13px · entry top = (startHour − 8) × 13</div>
+          <div class="sep"></div>
+          <div class="hints">
+            <span><b>↵</b> open day</span><span><b>hl</b> day</span><span><b>w</b> cycle range</span><span><b>a</b> axis</span>
+            <span style="color:var(--dim15);border:1px dashed rgba(205,214,244,0.35);padding:0 4px">◌</span><span>unapplied</span>
+            <span style="color:var(--urgent)">▨ conflict</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mockcol">
+        <div class="mocklabel"><b>AXIS</b> · derived by default, pinnable per edge</div>
+        <div class="panel coord" style="width:392px">
+          <div class="floor" style="align-items:center;gap:8px">
+            <span class="subhead" style="margin:0">AXIS</span>
+            <span style="flex:1 1 auto;color:var(--dim15)">fixed, 07:00 – 21:00</span>
+            <span class="subhead" style="margin:0">STARTS</span>
+            <span class="field focused" style="width:64px;justify-content:space-between"><span>07</span><span class="ghost">− +</span></span>
+            <span class="subhead" style="margin:0 0 0 4px">ENDS</span>
+            <span class="field" style="width:64px;justify-content:space-between"><span>21</span><span class="ghost">− +</span></span>
+            <span style="border:1px solid var(--border-normal);padding:2px 7px;color:var(--dim15);margin-left:4px">Reset</span>
+          </div>
+          <div class="tok">one row (R-AI) · NumberField ×2, fieldWidth 64, caption labels · writes calendarDayStart / calendarDayEnd</div>
+          <div class="sep"></div>
+          <div class="floor"><span class="bad">▸</span><span>3 entries fall outside 07:00 – 21:00</span></div>
+          <div class="tok">only reachable when overridden — derived bounds always contain the data</div>
+        </div>
+        <div class="note" style="max-width:392px;margin-top:6px">
+          <p><strong>Derived, in order:</strong> earliest start and latest end across every entry <em>and</em> every unapplied block in the range — blocks count, or a day of unlogged early work falls outside its own axis. Floor and ceil to the hour, pad one hour each side, enforce a 6&nbsp;hour minimum and a 16&nbsp;hour maximum, then <code>rowHeight = round(156 / span)</code> floored at 8&nbsp;px.</p>
+          <p><strong>Either edge can be pinned alone.</strong> Set the start, leave the end on <code>auto</code>. Bounds recompute when the range changes, and once on arrival when paging — never mid-page, which would make the grid jump under the cursor.</p>
+        </div>
+      </div>
+
+      <div class="mockcol">
+        <div class="mocklabel"><b>2W</b> · 24 Aug – 6 Sep · density strip per day</div>
+        <div class="panel coord">
+          <div class="dayhead">
+            <span class="nav">‹</span><span class="date">24 Aug – 6 Sep</span><span class="nav">›</span>
+            <span class="rangechips"><span>W</span><span class="on">2W</span><span>M</span></span>
+            <span class="tot" style="margin-left:12px">67h35</span>
+          </div>
+          <div class="sep"></div>
+          <div class="calgrid">
+            <div class="caldow">M</div><div class="caldow">T</div><div class="caldow">W</div>
+            <div class="caldow">T</div><div class="caldow">F</div><div class="caldow">S</div>
+            <div class="caldow">S</div><div class="caldow">Σ</div>
+
+            <div class="fncell"><div class="n"><span>24</span></div><div class="h">6h40</div>
+              <div class="strip"><i style="flex:4;background:var(--p-backend)"></i><i class="gapx" style="flex:1"></i><i style="flex:3;background:var(--p-admin)"></i></div></div>
+            <div class="fncell"><div class="n"><span>25</span></div><div class="h">8h10</div>
+              <div class="strip"><i style="flex:6;background:var(--p-backend)"></i><i class="gapx" style="flex:1"></i><i style="flex:2;background:var(--p-docs)"></i></div></div>
+            <div class="fncell"><div class="n"><span>26</span></div><div class="h">7h55</div>
+              <div class="strip"><i style="flex:3;background:var(--p-infra)"></i><i class="gapx" style="flex:1"></i><i style="flex:5;background:var(--p-backend)"></i></div></div>
+            <div class="fncell"><div class="n"><span>27</span><span class="flag urg">▲</span></div><div class="h">8h30</div>
+              <div class="strip"><i style="flex:5;background:var(--p-backend)"></i><i style="flex:1;background:var(--urgent)"></i><i style="flex:3;background:var(--p-support)"></i></div></div>
+            <div class="fncell"><div class="n"><span>28</span></div><div class="h">4h20</div>
+              <div class="strip"><i style="flex:3;background:var(--p-docs)"></i><i class="gapx" style="flex:2"></i><i style="flex:1;background:var(--p-admin)"></i></div></div>
+            <div class="fncell weekend empty"><div class="n"><span>29</span></div><div class="h">—</div></div>
+            <div class="fncell weekend empty"><div class="n"><span>30</span></div><div class="h">—</div></div>
+            <div class="calweek" style="height:66px"><div class="wh">35h35</div><div class="wl">W35</div></div>
+
+            <div class="fncell"><div class="n"><span>31</span></div><div class="h">7h00</div>
+              <div class="strip"><i style="flex:4;background:var(--p-backend)"></i><i class="gapx" style="flex:2"></i><i style="flex:4;background:var(--p-backend)"></i></div></div>
+            <div class="fncell"><div class="n"><span>1</span></div><div class="h">7h10</div>
+              <div class="strip"><i style="flex:4;background:var(--p-backend)"></i><i class="gapx" style="flex:1"></i><i style="flex:4;background:var(--p-docs)"></i></div></div>
+            <div class="fncell"><div class="n"><span>2</span></div><div class="h">8h25</div>
+              <div class="strip"><i style="flex:4;background:var(--p-backend)"></i><i class="gapx" style="flex:1"></i><i style="flex:5;background:var(--p-infra)"></i></div></div>
+            <div class="fncell today"><div class="n"><span>3</span><span class="flag">◌</span></div><div class="h">8h05</div>
+              <div class="strip"><i style="flex:1;background:var(--p-backend)"></i><i style="flex:3;background:var(--p-backend)"></i><i style="flex:1;background:var(--p-backend)"></i><i style="flex:1;background:var(--p-docs)"></i><i style="flex:1;background:rgba(205,214,244,0.18)"></i><i style="flex:2;background:var(--urgent)"></i></div></div>
+            <div class="fncell empty"><div class="n"><span>4</span></div><div class="h">—</div></div>
+            <div class="fncell weekend"><div class="n"><span>5</span></div><div class="h">1h20</div>
+              <div class="strip"><i style="flex:1;background:var(--p-infra)"></i></div></div>
+            <div class="fncell weekend empty"><div class="n"><span>6</span></div><div class="h">—</div></div>
+            <div class="calweek" style="height:66px"><div class="wh">32h00</div><div class="wl">W36</div></div>
+          </div>
+          <div class="tok">strip is wall-time ordered · hatched = break between blocks</div>
+          <div class="sep"></div>
+          <div class="hints"><span><b>↵</b> open day</span><span><b>hjkl</b> move</span><span><b>w</b> cycle range</span></div>
+        </div>
+      </div>
+
+      <div class="mockcol">
+        <div class="mocklabel"><b>M</b> · September 2026 · 3 Sep selected</div>
+        <div class="panel coord">
+          <div class="dayhead">
+            <span class="nav">‹</span><span class="date">September 2026</span><span class="nav">›</span>
+            <span class="rangechips"><span>W</span><span>2W</span><span class="on">M</span></span>
+            <span class="cnt" style="margin-left:auto">18 TRACKED DAYS · 4 WITH UNAPPLIED BLOCKS</span>
+            <span class="tot" style="margin-left:4px">96h40</span>
+          </div>
+          <div class="floor">
+            <span class="navoff">‹</span>
+            <span>June is as far back as Toggl will answer — <b style="color:var(--dim15)">start_date 4 Jun 2026</b></span>
+          </div>
+          <div class="sep"></div>
+          <div class="cmd">
+            <span class="chev">›</span><span class="txt ghost">filter by project or tag</span>
+            <span class="scope"><span>timer</span><span>day</span><span class="on">cal</span></span>
+          </div>
+
+          <div class="calgrid">
+            <div class="caldow">M</div><div class="caldow">T</div><div class="caldow">W</div>
+            <div class="caldow">T</div><div class="caldow">F</div><div class="caldow">S</div>
+            <div class="caldow">S</div><div class="caldow">Σ</div>
+
+            <div class="calcell out"><div class="n"><span>31</span></div><div class="h">—</div></div>
+            <div class="calcell"><div class="n"><span>1</span></div><div class="h">7h10</div>
+              <div class="stack"><i style="flex:6;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-docs)"></i></div></div>
+            <div class="calcell"><div class="n"><span>2</span></div><div class="h">8h25</div>
+              <div class="stack"><i style="flex:7;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-infra)"></i><i style="flex:1;background:var(--p-support)"></i></div></div>
+            <div class="calcell today sel"><div class="n"><span>3</span><span class="flag">◌</span></div><div class="h">8h05</div>
+              <div class="stack"><i style="flex:5;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-docs)"></i><i style="flex:2;background:rgba(205,214,244,0.18)"></i></div></div>
+            <div class="calcell empty"><div class="n"><span>4</span></div><div class="h">—</div></div>
+            <div class="calcell weekend"><div class="n"><span>5</span></div><div class="h">1h20</div>
+              <div class="stack"><i style="flex:1;background:var(--p-infra)"></i></div></div>
+            <div class="calcell weekend"><div class="n"><span>6</span></div><div class="h">—</div></div>
+            <div class="calweek"><div class="wh">24h60</div><div class="wl">W36</div></div>
+
+            <div class="calcell"><div class="n"><span>7</span></div><div class="h">8h50</div>
+              <div class="stack"><i style="flex:6;background:var(--p-backend)"></i><i style="flex:3;background:var(--p-infra)"></i></div></div>
+            <div class="calcell"><div class="n"><span>8</span><span class="flag urg">▲</span></div><div class="h">6h05</div>
+              <div class="stack"><i style="flex:4;background:var(--p-docs)"></i><i style="flex:2;background:var(--p-admin)"></i></div></div>
+            <div class="calcell"><div class="n"><span>9</span></div><div class="h">9h15</div>
+              <div class="stack"><i style="flex:7;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-support)"></i></div></div>
+            <div class="calcell"><div class="n"><span>10</span><span class="flag">◌</span></div><div class="h">7h40</div>
+              <div class="stack"><i style="flex:5;background:var(--p-backend)"></i><i style="flex:3;background:rgba(205,214,244,0.18)"></i></div></div>
+            <div class="calcell"><div class="n"><span>11</span></div><div class="h">5h30</div>
+              <div class="stack"><i style="flex:3;background:var(--p-docs)"></i><i style="flex:2;background:var(--p-admin)"></i></div></div>
+            <div class="calcell weekend"><div class="n"><span>12</span></div><div class="h">—</div></div>
+            <div class="calcell weekend"><div class="n"><span>13</span></div><div class="h">—</div></div>
+            <div class="calweek"><div class="wh">37h20</div><div class="wl">W37</div></div>
+
+            <div class="calcell"><div class="n"><span>14</span></div><div class="h">8h00</div>
+              <div class="stack"><i style="flex:6;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-infra)"></i></div></div>
+            <div class="calcell"><div class="n"><span>15</span></div><div class="h">8h35</div>
+              <div class="stack"><i style="flex:6;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-docs)"></i></div></div>
+            <div class="calcell"><div class="n"><span>16</span><span class="flag">◌</span></div><div class="h">7h05</div>
+              <div class="stack"><i style="flex:4;background:var(--p-support)"></i><i style="flex:3;background:rgba(205,214,244,0.18)"></i></div></div>
+            <div class="calcell"><div class="n"><span>17</span></div><div class="h">9h00</div>
+              <div class="stack"><i style="flex:7;background:var(--p-backend)"></i><i style="flex:2;background:var(--p-admin)"></i></div></div>
+            <div class="calcell"><div class="n"><span>18</span></div><div class="h">2h20</div>
+              <div class="stack"><i style="flex:2;background:var(--p-infra)"></i></div></div>
+            <div class="calcell weekend"><div class="n"><span>19</span></div><div class="h">—</div></div>
+            <div class="calcell weekend"><div class="n"><span>20</span></div><div class="h">—</div></div>
+            <div class="calweek"><div class="wh">35h00</div><div class="wl">W38</div></div>
+          </div>
+          <div class="tok">7 cells + week total · 4px gap · no rounding, Style.cornerRadius 0</div>
+
+          <div class="sep"></div>
+          <div class="hints">
+            <span><b>↵</b> open day</span><span><b>hjkl</b> move</span>
+            <span><b>◌</b> unapplied blocks</span><span><b>▲</b> conflict</span>
+            <span><b>^d</b> back to day</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <p><strong>The stack encodes proportion, not category.</strong> A 4&nbsp;px band split by project time — enough to see "that was a support week" without a legend. Untracked-but-recorded time shows as a neutral segment, so a day that is half unassigned looks half unassigned.</p>
+        <p><strong>Two flags, not a badge cloud.</strong> <span style="color:var(--warn)">◌</span> means the day has ActivityWatch blocks nobody applied. <span style="color:var(--urgent)">▲</span> means a conflict is sitting there. Everything else is silent.</p>
+        <p><strong>Week totals get their own column.</strong> Cheap to compute, and the number people actually check.</p>
+        <p><strong>Ranges differ in kind, not scale.</strong> At a week a day gets 68&nbsp;px of width and 156&nbsp;px of height, so it can carry a real time axis and you can see that Thursday was six fragments and a conflict. At a fortnight that collapses to a 9&nbsp;px density strip. At a month, to a 4&nbsp;px stack. Each is the most the space honestly supports.</p>
+        <div class="callout urg">
+          <b>Toggl will not answer past 4 June, and this is measured, not assumed.</b>
+          The API refuses any <code>start_date</code> earlier than 91 days ago, so the
+          <span class="navoff">‹</span> stops there. Paging further cannot show an empty grid —
+          it must not offer the move at all. Full evidence in <b>D5</b> below.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============================================================
+       05 · ROW STATES
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head"><span class="num">05</span><h2>Row states</h2>
+      <span class="why">each one a real branch in Model.prepareBlocks() or blockReady()</span></div>
+    <p class="lede">The glyph carries the state so the row stays one line. Colour confirms; it is never the only signal.</p>
+    <div class="states">
+      <div class="state-line">
+        <div class="state-demo"><div class="drow st-applied"><span class="g">✓</span><span class="t">08:10</span><span class="d">1h05</span><span class="lbl">Morning triage</span><span class="as">acme · backend</span></div></div>
+        <div class="desc"><b style="color:var(--fg)">Applied.</b> An entry this plugin wrote covers the block — <code>created_with: omarchy-toggl-track/day</code>. Dimmed, still inspectable.</div>
+      </div>
+      <div class="state-line">
+        <div class="state-demo"><div class="drow st-ready"><span class="g">●</span><span class="t">11:50</span><span class="d">0h50</span><span class="lbl">Reviewing PRs</span><span class="as">acme · backend</span></div></div>
+        <div class="desc"><b style="color:var(--fg)">Ready.</b> Description and project both set, so <code>blockReady()</code> is true and <code>↵</code> writes it.</div>
+      </div>
+      <div class="state-line">
+        <div class="state-demo"><div class="drow st-ready"><span class="g">●</span><span class="t">12:45</span><span class="d">1h10</span><span class="lbl">Spec writing</span><span class="as">acme · docs <span class="guess">~</span></span></div></div>
+        <div class="desc"><b style="color:var(--warn)">Ready, guessed.</b> Named and assigned by the local model. <code>~</code> disappears the moment you touch the row. Guesses are never written unconfirmed.</div>
+      </div>
+      <div class="state-line">
+        <div class="state-demo"><div class="drow st-unass"><span class="g">◌</span><span class="t">14:05</span><span class="d">0h35</span><span class="lbl">Slack, Bitbucket</span><span class="as">— unassigned —</span></div></div>
+        <div class="desc"><b style="color:var(--fg)">Unassigned.</b> Label falls back to the block's own topics. Still counted in the day total — dropping short blocks is how the old model lost 46% of a measured day.</div>
+      </div>
+      <div class="state-line">
+        <div class="state-demo"><div class="drow st-conf"><span class="g">▲</span><span class="t">14:45</span><span class="d">2h00</span><span class="lbl">Standup + planning</span><span class="as">conflict · manual</span></div></div>
+        <div class="desc"><b style="color:var(--urgent)">Conflict.</b> A foreign entry overlaps. Inspect works, apply does not, and the server would reject the write anyway.</div>
+      </div>
+      <div class="state-line">
+        <div class="state-demo"><div class="drow st-ready"><span class="g" style="color:var(--dim18)">◍</span><span class="t">15:30</span><span class="d">0h20</span><span class="lbl">Reviewing PRs</span><span class="as" style="color:var(--dim18)">writing…</span></div></div>
+        <div class="desc"><b style="color:var(--fg)">In flight.</b> <code>request()</code> allows one call at a time, so batch apply drains <code>applyQueue</code> row by row. The row says so, not the whole panel.</div>
+      </div>
+    </div>
+    <div class="callout urg">
+      <b>Never merged into one glyph:</b> applied and conflict look alike at a glance but mean
+      opposite things — one is your own work, one is somebody else's entry that must not be
+      overwritten. They differ in glyph, colour <em>and</em> trailing text.
+    </div>
+  </section>
+
+  <!-- =============================================================
+       06 · THEME AUDIT
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head"><span class="num">06</span><h2>Theme coordination audit</h2>
+      <span class="tag" style="border-color:var(--urgent);color:var(--urgent)">5 FINDINGS</span>
+      <span class="why">measured against the built-in shell plugins</span></div>
+    <p class="lede">
+      The shell exposes surface-scoped colour roles — <code>Color.popups.*</code>,
+      <code>Color.menu.*</code>, <code>Color.tooltip.*</code> — and every built-in popup uses them.
+      A panel <em>is</em> a popup surface. This plugin paints one with bar colours and hand-computed dimming.
+    </p>
+
+    <div class="grid2" style="margin-bottom:20px">
+      <div>
+        <h3>Counted in Panel.qml</h3>
+        <div class="scroll">
+          <table class="tbl">
+            <thead><tr><th>USAGE</th><th>PANEL.QML</th><th>BUILT-IN GALLERY</th></tr></thead>
+            <tbody>
+              <tr><td class="v"><code>Qt.darker(foreground, N)</code></td><td class="n" style="color:var(--urgent)">21</td><td class="n">0</td></tr>
+              <tr><td class="v"><code>Color.popups.*</code></td><td class="n" style="color:var(--urgent)">0</td><td class="n">3</td></tr>
+              <tr><td class="v"><code>Style.normalFill / hoverFill / selectedFill</code></td><td class="n" style="color:var(--urgent)">0</td><td class="n">5</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <h3>What a theme can and cannot reach</h3>
+        <p class="note">Every <code>Qt.darker()</code> tier is a value the theme author has no way to influence. Twenty-one of them, across every muted label, every meta line, and every disabled state in the panel.</p>
+        <p class="note">The fix is not a new palette. It is using the roles the shell already publishes.</p>
+      </div>
+    </div>
+
+    <div class="scroll">
+      <table class="tbl">
+        <thead><tr><th>ID</th><th>FINDING</th><th>WHERE</th><th>FIX</th></tr></thead>
+        <tbody>
+          <tr><td class="id"><span class="sev hi"></span>T1</td>
+            <td class="v">Panel paints with <code>bar.foreground</code> and <code>Color.background</code>, so a theme's <code>[popups]</code> block is ignored entirely.</td>
+            <td class="k">Panel.qml:16, throughout</td>
+            <td class="v">Take <code>Color.popups.background</code> / <code>.text</code> / <code>.border</code>.</td></tr>
+          <tr><td class="id"><span class="sev hi"></span>T2</td>
+            <td class="v">Panel <em>overrides</em> the one component that was themed correctly — it passes <code>foreground: root.foreground; background: Color.background</code> into every <code>SearchableDropdown</code>, replacing that component's own <code>Color.popups.*</code> defaults.</td>
+            <td class="k">Panel.qml — 5 dropdowns</td>
+            <td class="v">Drop both overrides. The component is already right.</td></tr>
+          <tr><td class="id"><span class="sev md"></span>T3</td>
+            <td class="v">21 hand-rolled dim tiers via <code>Qt.darker()</code>. No theme token behind any of them, and the 1.5 / 1.6 / 1.8 factors are used inconsistently for the same semantic role.</td>
+            <td class="k">Panel.qml, 21 sites</td>
+            <td class="v">Three named panel properties built with <code>Util.alpha(Color.popups.text, …)</code>, so tiers track whatever the theme sets.</td></tr>
+          <tr><td class="id"><span class="sev md"></span>T4</td>
+            <td class="v">Row hover and selection are hand-drawn instead of <code>Style.hoverFill</code> / <code>Style.selectedFill</code>, which already carry the theme's <code>[controls]</code> alphas.</td>
+            <td class="k">Panel.qml — recent list, day rows</td>
+            <td class="v">Use the Style fills. Free hover, focus and selected states.</td></tr>
+          <tr><td class="id"><span class="sev lo"></span>T5</td>
+            <td class="v"><code>popups.background-alpha</code> supports translucency; hard-coding <code>Color.background</code> forces the panel opaque while other popups follow the theme.</td>
+            <td class="k">Panel.qml</td>
+            <td class="v">Use the composed role and inherit the alpha.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">
+      <b>Visible consequence, shown above.</b> <code>Color.popups.border</code> falls back to
+      <code>Color.accent</code>, so a coordinated panel is bordered in
+      <span style="color:var(--accent)">#89b4fa</span> under aether, matching every other popup
+      in the shell. Every panel on this page is drawn with that border — that is the change,
+      not a styling choice I made.
+    </div>
+  </section>
+
+  <!-- =============================================================
+       07 · BACKEND AUDIT
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head"><span class="num">07</span><h2>Backend audit</h2>
+      <span class="tag" style="border-color:var(--warn);color:var(--warn)">9 PERF · 7 DATA</span>
+      <span class="why">toggl_api.py 1408 · Model.js · Panel.qml</span></div>
+    <p class="lede">
+      The helper handles exactly one JSON request per process and exits. Nothing here proposes a
+      daemon — every fix below works inside that constraint.
+    </p>
+
+    <h3 style="margin-top:18px">Where the sluggishness is</h3>
+    <div class="scroll">
+      <table class="tbl">
+        <thead><tr><th>ID</th><th>FINDING</th><th>WHERE</th><th>COST</th></tr></thead>
+        <tbody>
+          <tr><td class="id"><span class="sev hi"></span>P1</td>
+            <td class="v">Opening the panel fires <code>bootstrap</code>, then <code>sync</code> from its response — two cold Python starts, each spawning <code>secret-tool</code> as a subprocess before any HTTP happens.</td>
+            <td class="k">Panel.qml:onCompleted → handleResponse</td>
+            <td class="n">2× startup before first paint</td></tr>
+          <tr><td class="id"><span class="sev hi"></span>P2</td>
+            <td class="v"><code>/me/time_entries</code> is refetched on every <code>sync</code> over the whole window, even when the metadata cache is fresh. The <code>since</code> parameter — documented, delta by modification time — is unused.</td>
+            <td class="k">toggl_api.py:1096, 1138</td>
+            <td class="n">dominant call at 365d</td></tr>
+          <tr><td class="id"><span class="sev hi"></span>P3</td>
+            <td class="v">Entries are never cached. <code>_CacheStore</code> holds projects, tasks, tags and clients only, so history is re-downloaded on every open.</td>
+            <td class="k">toggl_api.py:728</td>
+            <td class="n">full history per open</td></tr>
+          <tr><td class="id"><span class="sev md"></span>P4</td>
+            <td class="v"><code>day_activity</code> re-lists every ActivityWatch bucket on each call to resolve three ids that never change.</td>
+            <td class="k">toggl_api.py:1175</td>
+            <td class="n">+1 round trip per day switch</td></tr>
+          <tr><td class="id"><span class="sev md"></span>P5</td>
+            <td class="v">Changing the break setting reloads the whole day from ActivityWatch, although <code>segment_blocks</code> is pure and could re-segment cached fragments.</td>
+            <td class="k">Panel.qml:setDayBlockMinutes</td>
+            <td class="n">4 HTTP calls for a local recompute</td></tr>
+          <tr><td class="id"><span class="sev md"></span>P6</td>
+            <td class="v"><code>day_activity</code> fetches that day's entries again via <code>_history_entries</code>, although <code>sync</code> already returned them.</td>
+            <td class="k">toggl_api.py:1213</td>
+            <td class="n">redundant request</td></tr>
+          <tr><td class="id"><span class="sev hi"></span>P7</td>
+            <td class="v"><code>searchItems()</code> runs <code>normalizeProject</code> and <code>normalizeTask</code> over every project and task <em>on every keystroke</em> — building a 25-field object each time — though <code>applyData</code> already normalised both on arrival.</td>
+            <td class="k">Model.js:searchItems · Panel.qml:applyData</td>
+            <td class="n">double work, per keystroke</td></tr>
+          <tr><td class="id"><span class="sev md"></span>P8</td>
+            <td class="v"><code>request()</code> returns early and silently when <code>requestPending</code> is set. The click does not queue and nothing tells the user.</td>
+            <td class="k">Panel.qml:143</td>
+            <td class="n">reads as broken, not slow</td></tr>
+          <tr><td class="id"><span class="sev lo"></span>P9</td>
+            <td class="v"><code>daySummary</code> recomputes across all blocks on every <code>dayRevision</code> bump — which happens on every keystroke in a block editor.</td>
+            <td class="k">Panel.qml:53</td>
+            <td class="n">O(blocks) per keystroke</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:26px">Information we compute and throw away, or never ask for</h3>
+    <div class="scroll">
+      <table class="tbl">
+        <thead><tr><th>ID</th><th>GAP</th><th>NEEDED BY</th><th>COST TO FIX</th></tr></thead>
+        <tbody>
+          <tr><td class="id"><span class="sev md"></span>D1</td>
+            <td class="v"><code>segment_blocks</code> builds a full <code>domains</code> weight map, then keeps only <code>max()</code> and discards the rest.</td>
+            <td class="v">inspect drawer</td><td class="n">return the dict</td></tr>
+          <tr><td class="id"><span class="sev md"></span>D2</td>
+            <td class="v"><code>apps</code> is a bare name list. Per-fragment seconds are already in hand one loop earlier.</td>
+            <td class="v">inspect drawer</td><td class="n">accumulate, don't drop</td></tr>
+          <tr><td class="id"><span class="sev md"></span>D3</td>
+            <td class="v">Fragment count and longest run are never returned. Switch rate is the honest measure of how fragmented a block was — and the whole reason blocks exist.</td>
+            <td class="v">inspect drawer, timeline</td><td class="n">two counters</td></tr>
+          <tr><td class="id"><span class="sev hi"></span>D4</td>
+            <td class="v">No action returns entries for an arbitrary range. <code>sync</code> counts <code>historyDays</code> back from today, so the calendar cannot ask for "August" — only for "the last N days". Now bounded by D5: any range action must clamp to the 91-day floor.</td>
+            <td class="v">calendar scope · all 3 ranges</td><td class="n">range action, clamped</td></tr>
+          <tr><td class="id"><span class="sev hi"></span>D5</td>
+            <td class="v"><b style="color:var(--urgent)">Confirmed against your account.</b> <code>historyDays: 365</code> does not truncate — it fails. Toggl rejects any <code>start_date</code> earlier than 91 days with <b>HTTP 400</b>, so the 365 option in the UI and in <code>manifest.json</code> breaks <code>sync</code> outright, every time. <code>_history_days</code> accepts it and <code>_http_message(400)</code> then hides the real reason.</td>
+            <td class="v">everything</td><td class="n">drop 365, clamp to 92</td></tr>
+          <tr><td class="id"><span class="sev md"></span>D6</td>
+            <td class="v"><b style="color:var(--ok)">Confirmed available.</b> <code>meta=true</code> returns <code>project_name</code>, <code>client_name</code>, <code>task_name</code>, <code>project_color</code>, <code>project_active</code>, <code>tag_ids</code> and <code>duronly</code> inline — replacing five lookup maps, and handing the calendar its per-entry project colour for free.</td>
+            <td class="v">calendar, simplification</td><td class="n">one query param</td></tr>
+          <tr><td class="id"><span class="sev lo"></span>D7</td>
+            <td class="v">Idle time removed per block is derivable as <code>span_seconds − seconds</code> but never surfaced, so the user cannot see what was subtracted on their behalf.</td>
+            <td class="v">inspect drawer</td><td class="n">display only</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:26px">D5, verified — read-only probe against your workspace</h3>
+    <p class="lede" style="margin-bottom:14px">
+      Run through the repo's own <code>TogglClient</code>, so the token never reached argv or output.
+      Windows bisected to find the boundary; the last row is the server's own message, which
+      <code>_http_message()</code> currently replaces with "Toggl request failed."
+    </p>
+    <div class="scroll">
+      <table class="tbl">
+        <thead><tr><th>REQUEST</th><th>RESULT</th><th>ENTRIES</th><th>OLDEST RETURNED</th></tr></thead>
+        <tbody>
+          <tr><td class="k">30d window</td><td class="v" style="color:var(--ok)">200 OK</td><td class="n">69</td><td class="n">2026-08-05</td></tr>
+          <tr><td class="k">90d window</td><td class="v" style="color:var(--ok)">200 OK</td><td class="n">114</td><td class="n">2026-06-08</td></tr>
+          <tr><td class="k">92d window</td><td class="v" style="color:var(--ok)">200 OK</td><td class="n">—</td><td class="n">start_date 2026-06-04</td></tr>
+          <tr><td class="k">93d window</td><td class="v" style="color:var(--urgent)">400</td><td class="n">—</td><td class="n">start_date 2026-06-03</td></tr>
+          <tr><td class="k">180d / 365d / 730d window</td><td class="v" style="color:var(--urgent)">400</td><td class="n">0</td><td class="n">—</td></tr>
+          <tr><td class="k">start_date −95d, no end_date</td><td class="v" style="color:var(--urgent)">400</td><td class="n">0</td><td class="n">—</td></tr>
+          <tr><td class="k">since −30d</td><td class="v" style="color:var(--ok)">200 OK</td><td class="n">72</td><td class="n">2026-08-03</td></tr>
+          <tr><td class="k">since −365d</td><td class="v" style="color:var(--urgent)">400</td><td class="n">0</td><td class="n">the floor applies to <code>since</code> too</td></tr>
+          <tr><td class="k">raw body on rejection</td><td class="v" colspan="3" style="color:var(--warn)">"start_date must not be earlier than 2026-06-04"</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout urg">
+      <b>Three consequences, all live today.</b>
+      <b>One —</b> <code>historyDays: 365</code> is a broken setting shipped in
+      <code>manifest.json</code> and offered in the settings <code>ButtonGroup</code>. Selecting it
+      makes every <code>sync</code> return 400, and the panel shows "Toggl request failed" with no
+      way to guess why. <b>Two —</b> <code>90</code> works but sits 2 days from the cliff;
+      the clamp belongs in <code>_history_days</code>, not in the UI options.
+      <b>Three —</b> the calendar can never page past 91 days, so
+      <span class="navoff">‹</span> must disable at the floor rather than render an empty month.
+    </div>
+    <div class="callout">
+      <b>The 1000-entry cap could not be reproduced, and no longer matters.</b> 90 days of your
+      history is 114 entries, and the window cannot exceed 92 days anyway — the cap is
+      unreachable before the date floor stops you. Dropping it from the risk list.
+    </div>
+    <div class="callout ok">
+      <b>The cheapest three, in order.</b> <b>P7</b> is a one-line fix in <code>searchItems</code>
+      with an immediate feel improvement. <b>P4</b> caches three stable bucket ids. <b>D1–D3</b>
+      are pure additions to a dict that is already being built — they cost one loop and unlock
+      the entire inspect drawer.
+    </div>
+  </section>
+
+  <!-- =============================================================
+       08 · VALUES
+       ============================================================= -->
+  <!-- =============================================================
+       08 · LOGGING
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head"><span class="num">08</span><h2>Logging</h2>
+      <span class="tag new">NEW</span>
+      <span class="why">in the install dir · 24-hour ring · titles never written at default level</span></div>
+    <p class="lede">
+      So a bug report has something to attach, and so the performance claims in §07 get
+      verified rather than believed. One JSON object per line — greppable, tailable,
+      parseable without a reader.
+    </p>
+
+    <div class="grid2">
+      <div>
+        <h3>Where</h3>
+        <pre class="code"><b>&lt;plugin dir&gt;/logs/toggl.jsonl</b>
+<span class="c">os.path.dirname(os.path.abspath(__file__))</span>
+<span class="c">normally ~/.config/omarchy/plugins/daz.toggl-track/</span></pre>
+        <div class="callout" style="margin-top:14px">
+          <b>Two consequences of logging into the install directory, both accepted.</b>
+          Your install is a <em>symlink into the git working tree</em>, so
+          <code>logs/</code> must join <code>.gitignore</code> in the same change or every
+          write dirties the repo. And <code>omarchy plugin remove</code> deletes the logs
+          with the plugin — correct for a log that belongs to the install.
+        </div>
+        <p class="note" style="margin-top:14px"><strong>Logging never raises into the request path.</strong> A read-only install or a permissions failure disables it silently for that process and the request proceeds.</p>
+
+        <h3 style="margin-top:22px">A record</h3>
+        <pre class="code">{<span class="k">"ts"</span>:<span class="s">"2026-09-04T09:14:22.108Z"</span>,<span class="k">"lvl"</span>:<span class="s">"info"</span>,
+ <span class="k">"action"</span>:<span class="s">"sync"</span>,<span class="k">"ms"</span>:412,<span class="k">"ok"</span>:true,
+ <span class="k">"http"</span>:[{<span class="k">"path"</span>:<span class="s">"/me/time_entries"</span>,
+         <span class="k">"status"</span>:200,<span class="k">"ms"</span>:244,<span class="k">"bytes"</span>:48210}],
+ <span class="k">"cache"</span>:{<span class="k">"workspace"</span>:<span class="s">"fresh"</span>,<span class="k">"entries"</span>:<span class="s">"miss"</span>},
+ <span class="k">"counts"</span>:{<span class="k">"entries"</span>:114,<span class="k">"projects"</span>:37}}</pre>
+      </div>
+
+      <div>
+        <h3>Levels</h3>
+        <div class="scroll">
+          <table class="tbl">
+            <thead><tr><th>LEVEL</th><th>EMITS</th></tr></thead>
+            <tbody>
+              <tr><td class="k">off</td><td class="v">nothing; the file is not created</td></tr>
+              <tr><td class="k">errors</td><td class="v">failures only</td></tr>
+              <tr><td class="k">info</td><td class="v"><b style="color:var(--fg)">default</b> — one record per action: timings, HTTP statuses, cache states, counts</td></tr>
+              <tr><td class="k">debug</td><td class="v">adds ActivityWatch bucket ids, per-block segmentation timings, and the classifier prompt and response</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:22px">Redaction, enforced at the writer</h3>
+        <ul class="note" style="max-width:none">
+          <li>The API token is never written, at any level, on any path. Covered by a test over the log writer.</li>
+          <li>Window titles, topic names, entry descriptions and project names are <strong>not written at <code>info</code></strong>. Counts and durations are.</li>
+          <li><code>debug</code> does write them, and the settings control says so plainly.</li>
+          <li>Every string field truncates at 500 characters.</li>
+        </ul>
+        <div class="callout ok">
+          <b>Why redaction is not optional here.</b> The entire reason classification runs
+          locally is that window titles do not leave the machine. A verbose log sitting in
+          the install directory would quietly undo that.
+        </div>
+
+        <h3 style="margin-top:22px">Ring buffer — age first, size second</h3>
+        <div class="ring">
+          <div class="drop">older than 24h · dropped</div>
+          <div class="keep">kept</div>
+          <div class="head">new</div>
+        </div>
+        <ul class="note" style="max-width:none;margin-top:12px">
+          <li>Appends are a single <code>write()</code> on <code>O_APPEND</code>. No lock on the common path.</li>
+          <li>Crossing <b>1 MiB</b> takes an exclusive <code>flock</code>, rewrites keeping only the last <b>24 hours</b>, releases.</li>
+          <li>Still over after that, the oldest survivors drop until it fits. Age is the bound; size is the backstop.</li>
+          <li>Pruning runs at most once per process, <em>after</em> the record is appended, so it never delays a response.</li>
+          <li>A malformed line is dropped during a prune, never aborts it.</li>
+        </ul>
+        <p class="note"><strong>Panel-side events ride along.</strong> <code>Panel.qml</code> writes no files. A dropped request or a queue overflow accumulates in a bounded array of 32 and travels on the next request as <code>client_log</code>, flushed with <code>"src":"qml"</code>. No extra process.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =============================================================
+       09 · SHARING
+       ============================================================= -->
+  <section class="slab">
+    <div class="slab-head"><span class="num">09</span><h2>Build and install</h2>
+      <span class="tag new">NEW</span>
+      <span class="why">nothing to package — Omarchy installs plugins from git</span></div>
+    <p class="lede">
+      <code>omarchy plugin add &lt;git-url&gt;</code> clones into a staging directory, validates
+      the manifest, and moves it to <code>~/.config/omarchy/plugins/&lt;manifest.id&gt;/</code>.
+      There is no archive format to invent and no installer to write for the normal path.
+      What the repo lacks is a <b style="color:var(--fg)">release gate</b> and a
+      <b style="color:var(--fg)">local install</b> path.
+    </p>
+
+    <div class="grid2">
+      <div>
+        <h3><code>build</code> — a gate, not a compiler</h3>
+        <p class="note">Nothing compiles; QML and Python ship as source. It exits non-zero on the first failure and says which.</p>
+        <div class="scroll">
+          <table class="tbl">
+            <thead><tr><th>#</th><th>CHECK</th></tr></thead>
+            <tbody>
+              <tr><td class="id">1</td><td class="v"><code>omarchy plugin validate .</code> — passes today, exit 0</td></tr>
+              <tr><td class="id">2</td><td class="v"><code>py_compile</code> the helper and its tests</td></tr>
+              <tr><td class="id">3</td><td class="v"><code>unittest discover -s tests</code></td></tr>
+              <tr><td class="id">4</td><td class="v"><code>node tests/test_model.mjs</code></td></tr>
+              <tr><td class="id">5</td><td class="v"><code>bash -n setup build install</code></td></tr>
+              <tr><td class="id">6</td><td class="v"><code>qmlformat</code> over <code>Panel.qml</code> and every <code>ui/*.qml</code>, <b style="color:var(--urgent)">by exit status, never piped</b></td></tr>
+              <tr><td class="id">7</td><td class="v"><code>BarWidget.qml</code> skipped and listed as hand-review — both tools reject <code>function open(): void</code>, which <code>IpcHandler</code> requires</td></tr>
+              <tr><td class="id">8</td><td class="v">tree clean; <code>manifest.json</code> version not already tagged</td></tr>
+              <tr><td class="id">9</td><td class="v">nothing that must not ship is tracked — no <code>logs/</code>, no <code>*.gguf</code>, no <code>__pycache__/</code>, no token anywhere</td></tr>
+              <tr><td class="id">10</td><td class="v"><code>dist/…tar.gz</code> + <code>SHA256SUMS</code> for offline install and release attachments</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout urg">
+          <b>Step 6 is the one that has already bitten this repo.</b>
+          <code>qmllint</code> writes nothing on failure, so <code>qmllint x.qml | tail</code>
+          returns <em>tail's</em> exit status and a broken file reads as green. This produced
+          a false "baseline passes" during development. Check the status directly.
+        </div>
+      </div>
+
+      <div>
+        <h3><code>install</code></h3>
+        <pre class="code">install                  <span class="c"># copy into ~/.config/omarchy/plugins/</span>
+install --dev            <span class="c"># symlink instead, edit in place</span>
+install --enable         <span class="c"># also: omarchy plugin enable … center</span>
+install --uninstall      <span class="c"># remove, keep token + cache + logs</span>
+install --uninstall --purge <span class="c"># also remove secret, cache, model</span></pre>
+        <ul class="note" style="max-width:none;margin-top:14px">
+          <li>Target directory comes from <code>manifest.json</code>'s <code>id</code>, never hard-coded, so a rename cannot orphan an install.</li>
+          <li>Refuses to overwrite a non-symlink install without <code>--force</code>, and names what is there.</li>
+          <li><code>--dev</code> reproduces the symlink you placed by hand — the existing setup keeps working and stops being undocumented.</li>
+          <li>It does not run <code>setup</code>. Token entry and the model download stay explicit.</li>
+        </ul>
+        <div class="callout">
+          <b>The one manual step it prints.</b> <code>omarchy-restart-shell</code>.
+          A <code>reloadConfig</code> keeps the plugin's <code>Loader</code> alive so a panel
+          edit never appears, and <code>rescanPlugins</code> is not in this shell's IPC
+          surface at all — it prints nothing and exits 0, indistinguishable from success.
+          It must not be suggested.
+        </div>
+
+        <h3 style="margin-top:22px">Repository, for sharing</h3>
+        <ul class="note" style="max-width:none">
+          <li><code>README.md</code> leads with <code>omarchy plugin add &lt;git-url&gt; --enable</code>.</li>
+          <li><code>.gitignore</code> gains <code>logs/</code>, <code>dist/</code>, <code>*.gguf</code>.</li>
+          <li><code>manifest.json</code> carries the new settings and their defaults, so a fresh clone starts valid.</li>
+          <li>The model is never committed. 378 MB, fetched by <code>setup</code>.</li>
+          <li><code>setup</code> becomes idempotent — an existing token is kept unless <code>--reset</code>, an existing model is checksum-verified rather than refetched.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="slab">
+    <div class="slab-head"><span class="num">10</span><h2>Values used, and where they came from</h2>
+      <span class="why">nothing chosen where the theme already had an answer</span></div>
+
+    <div class="swatches" style="margin:14px 0 22px">
+      <div class="sw"><div class="chip" style="background:#1e1e2e"></div><div class="nm">Color.background</div><div class="hx">#1e1e2e</div></div>
+      <div class="sw"><div class="chip" style="background:#cdd6f4"></div><div class="nm">Color.foreground</div><div class="hx">#cdd6f4</div></div>
+      <div class="sw"><div class="chip" style="background:#89b4fa"></div><div class="nm">Color.accent</div><div class="hx">#89b4fa</div></div>
+      <div class="sw"><div class="chip" style="background:#f38ba8"></div><div class="nm">Color.urgent</div><div class="hx">#f38ba8</div></div>
+      <div class="sw"><div class="chip" style="background:#898fa3"></div><div class="nm">darker(fg, 1.5)</div><div class="hx">#898fa3</div></div>
+      <div class="sw"><div class="chip" style="background:#808599"></div><div class="nm">darker(fg, 1.6)</div><div class="hx">#808599</div></div>
+      <div class="sw"><div class="chip" style="background:#727788"></div><div class="nm">darker(fg, 1.8)</div><div class="hx">#727788</div></div>
+      <div class="sw"><div class="chip" style="background:#0b83d9"></div><div class="nm">project · server</div><div class="hx">#0b83d9</div></div>
+      <div class="sw"><div class="chip" style="background:#9e5bd9"></div><div class="nm">project · server</div><div class="hx">#9e5bd9</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="scroll">
+        <table class="tbl">
+          <thead><tr><th>TYPE TOKEN</th><th>PX</th><th>USED FOR</th></tr></thead>
+          <tbody>
+            <tr><td class="k">Style.font.caption</td><td class="n">10</td><td class="v">meta, hints, facts, calendar day numbers</td></tr>
+            <tr><td class="k">Style.font.bodySmall</td><td class="n">11</td><td class="v">every row, the command line, day totals in cells</td></tr>
+            <tr><td class="k">Style.font.body</td><td class="n">12</td><td class="v">bar widget label</td></tr>
+            <tr><td class="k">Style.font.title</td><td class="n">14</td><td class="v">day and month totals</td></tr>
+            <tr><td class="k">Style.font.display</td><td class="n">24</td><td class="v">available, unused in this design</td></tr>
+            <tr><td class="k">Style.fontFamily</td><td class="n">—</td><td class="v"><code>monospace</code> → JetBrainsMono Nerd Font</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="scroll">
+        <table class="tbl">
+          <thead><tr><th>SPACING TOKEN</th><th>PX</th><th>USED FOR</th></tr></thead>
+          <tbody>
+            <tr><td class="k">panelPadding</td><td class="n">18</td><td class="v">panel inset</td></tr>
+            <tr><td class="k">panelGap</td><td class="n">14</td><td class="v">between panel sections</td></tr>
+            <tr><td class="k">rowGap</td><td class="n">8</td><td class="v">inside a row</td></tr>
+            <tr><td class="k">controlHeight</td><td class="n">28</td><td class="v">input and fields</td></tr>
+            <tr><td class="k">controlPaddingX</td><td class="n">10</td><td class="v">control inset</td></tr>
+            <tr><td class="k">cornerRadius</td><td class="n">0</td><td class="v">everything — no rounding anywhere</td></tr>
+            <tr><td class="k">selectedFillAlpha</td><td class="n">0.18</td><td class="v">cursor row</td></tr>
+            <tr><td class="k">hoverFillAlpha</td><td class="n">0.08</td><td class="v">hovered row</td></tr>
+            <tr><td class="k">normalBorderAlpha</td><td class="n">0.40</td><td class="v">field borders</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="callout">
+      <b>Two things this page cannot show truthfully.</b> The real panel draws Nerd Font
+      private-use glyphs (󰑐 󰍉 󰒓 󰖟) that no web font carries, so Unicode stand-ins appear here.
+      And <code>Style.space()</code> multiplies by the user's spacing scale — these are unscaled defaults.
+    </div>
+  </section>
+
+  <footer>
+    <span>Panel.qml · Model.js · toggl_api.py · BarWidget.qml</span>
+    <span>theme: aether</span>
+    <span>workspace 7001</span>
+    <span>fontBaseSize 12 · spacingScale 1.0</span>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+
+  var zbtns = document.querySelectorAll('.seg button[data-z]');
+  zbtns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      zbtns.forEach(function (o) { o.setAttribute('aria-pressed', String(o === b)); });
+      root.style.setProperty('--z', b.dataset.z);
+    });
+  });
+
+  var tokbtn = document.getElementById('tokbtn');
+  tokbtn.addEventListener('click', function () {
+    var on = document.body.classList.toggle('tokens');
+    tokbtn.setAttribute('aria-pressed', String(on));
+    tokbtn.textContent = on ? 'hide Style tokens' : 'show Style tokens';
+  });
+
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var target = document.getElementById('cmdtext');
+  var rows = document.getElementById('cmdrows');
+  var restRows = rows.innerHTML;
+  var typing = false;
+  var SCRIPT = 'Reviewing PRs @acme/back';
+  var GHOST = 'end';
+
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  function row(sel, g, verb, lbl, meta) {
+    return '<div class="row' + (sel ? ' sel' : '') + '">' +
+      '<span class="g">' + g + '</span><span class="verb">' + verb + '</span>' +
+      '<span class="lbl">' + lbl + '</span><span class="meta">' + meta + '</span></div>';
+  }
+
+  function resultsFor(typed) {
+    var q = typed.toLowerCase();
+    if (!q.length) return restRows;
+    if (q.indexOf('@') !== -1) {
+      return row(1, '↵', 'START', 'Reviewing PRs', 'acme · backend') +
+             row(0, '▤', 'PROJ', 'acme / backend', '12 entries') +
+             row(0, '▤', 'PROJ', 'acme / backoffice', '2 entries');
+    }
+    return row(1, '↵', 'START', esc(typed), 'no project') +
+           row(0, '⟲', 'CONT', 'Reviewing PRs', 'acme · backend &nbsp;<span class="num">50m</span>') +
+           row(0, '◷', 'BLOCK', '11:50 Reviewing PRs', '<span class="num">0h50</span> &nbsp;today');
+  }
+
+  function render(n) {
+    var typed = SCRIPT.slice(0, n);
+    var at = typed.indexOf('@');
+    var html;
+    if (at === -1) {
+      html = esc(typed);
+    } else {
+      html = esc(typed.slice(0, at)) + '<span class="tk-proj">' + esc(typed.slice(at)) + '</span>';
+      if (n === SCRIPT.length) html += '<span class="ghost">' + GHOST + '</span>';
+    }
+    target.innerHTML = html;
+    rows.innerHTML = resultsFor(typed);
+  }
+
+  document.getElementById('typebtn').addEventListener('click', function () {
+    if (typing) return;
+    typing = true;
+    if (reduced) { render(SCRIPT.length); typing = false; return; }
+    var n = 0;
+    (function step() {
+      render(n); n++;
+      if (n <= SCRIPT.length) setTimeout(step, 52); else typing = false;
+    })();
+  });
+})();
+</script>

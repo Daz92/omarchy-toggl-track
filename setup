@@ -1,0 +1,658 @@
+#!/usr/bin/env bash
+set -eu
+
+reset=0
+update_runtime=0
+skip_classifier=0; with_classifier=0
+check_only=0; secure_keyring=0; plain_keyring=0; unlock_only=0; offline=0
+usage() {
+    cat >&2 <<'USAGE'
+usage: setup [--reset] [--skip-classifier | --classifier | --update-runtime]
+       setup --check [--offline]     check every dependency and report
+       setup --secure-keyring        move the token into a password-protected keyring
+       setup --plain-keyring         move it back to the login keyring
+       setup --unlock                unlock the protected keyring for this session
+USAGE
+    exit 2
+}
+for argument in "$@"; do
+    case "$argument" in
+        --reset) reset=1 ;;
+        --update-runtime) update_runtime=1 ;;
+        --skip-classifier) skip_classifier=1 ;;
+        --classifier) with_classifier=1 ;;
+        --check) check_only=1 ;;
+        --offline) offline=1 ;;
+        --secure-keyring) secure_keyring=1 ;;
+        --plain-keyring) plain_keyring=1 ;;
+        --unlock) unlock_only=1 ;;
+        *) usage ;;
+    esac
+done
+if [ $((secure_keyring + plain_keyring + unlock_only)) -gt 1 ]; then
+    printf 'Pick one keyring action.\n' >&2
+    usage
+fi
+
+for tool in secret-tool python3; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'Required tool missing: %s\n' "$tool" >&2
+        exit 1
+    fi
+done
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# --- Classifier constants ---------------------------------------------------
+# Where the model lives: $XDG_DATA_HOME, never $XDG_CACHE_HOME -- the cache is
+# TTL'd and safe to delete at any moment, and a 400 MB-1.1 GB download is not.
+MODEL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-toggl-track/models"
+LLAMA_BIN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-toggl-track/bin"
+LLAMA_SERVER_PORT=8127
+SYSTEMD_UNIT_NAME="omarchy-toggl-track-llama-server.service"
+SYSTEMD_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+# One chat model for both profiles (ruling R-AO). Granite 4.0 1B measured best
+# of eight models across six vendors on the real evaluation set: 65% project
+# accuracy without anchors and the only description that beat the raw window
+# title, at 901 MB -- smaller than the Qwen3-1.7B it replaces. The profile now
+# selects only the runtime, not the weights.
+MODEL_FILE="granite-4.0-h-1b-Q4_K_M.gguf"
+MODEL_URL="${TOGGL_CLASSIFIER_MODEL_URL:-https://huggingface.co/ibm-granite/granite-4.0-h-1b-GGUF/resolve/main/granite-4.0-h-1b-Q4_K_M.gguf}"
+MODEL_SIZE="${TOGGL_CLASSIFIER_MODEL_SIZE:-901162208}"
+MODEL_SHA256="${TOGGL_CLASSIFIER_MODEL_SHA256:-da3d737121a96f3c9a316685212376257a7f167b74380855666dd488d6af3bcb}"
+# The embedder decides the project (ruling R-AO): bge-small scored 77% against
+# the usage prior's 81% and blends with it, at 35 MB and no GPU required.
+EMBED_FILE="bge-small-en-v1.5-q8_0.gguf"
+EMBED_URL="${TOGGL_EMBED_MODEL_URL:-https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5-q8_0.gguf}"
+EMBED_SIZE="${TOGGL_EMBED_MODEL_SIZE:-36806944}"
+EMBED_SHA256="${TOGGL_EMBED_MODEL_SHA256:-ec38e8da142596baa913124ae50550de284b6916bf59577ef2f0cb9660c2f514}"
+EMBED_SERVER_PORT=8128
+EMBED_UNIT_NAME="omarchy-toggl-track-embedder.service"
+# The Vulkan build comes only from the upstream release (mise and pacman ship
+# CPU builds). Pinned so both profiles run the same llama.cpp. Upstream
+# publishes no checksum for the tarball; it is checked by size, by extracting
+# cleanly, and by --version.
+LLAMA_RELEASE_TAG="${TOGGL_LLAMA_RELEASE_TAG:-b10816}"
+VULKAN_DIR="$LLAMA_BIN_DIR/vulkan"
+VULKAN_SERVER="$VULKAN_DIR/llama-$LLAMA_RELEASE_TAG/llama-server"
+
+# Resolved by _classifier_select_profile; every later function reads it.
+CLASSIFIER_PROFILE=""
+
+_classifier_vulkan_available() {
+    # A Vulkan ICD for some GPU plus the loader library. Not a guarantee the
+    # device works -- the unit's Restart and the panel's degrade path cover
+    # that -- but enough to prefer the GPU profile.
+    local icd
+    for icd in /usr/share/vulkan/icd.d /etc/vulkan/icd.d; do
+        [ -d "$icd" ] && [ -n "$(ls -A "$icd" 2>/dev/null)" ] || continue
+        if ldconfig -p 2>/dev/null | grep -q 'libvulkan\.so\.1'; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+_classifier_select_profile() {
+    case "${TOGGL_CLASSIFIER_PROFILE:-auto}" in
+        gpu) CLASSIFIER_PROFILE=gpu ;;
+        cpu) CLASSIFIER_PROFILE=cpu ;;
+        *) if _classifier_vulkan_available; then CLASSIFIER_PROFILE=gpu; else CLASSIFIER_PROFILE=cpu; fi ;;
+    esac
+    printf 'Classifier profile: %s (%s)\n' "$CLASSIFIER_PROFILE" "$MODEL_FILE" >&2
+}
+
+_classifier_fall_back_to_cpu() {
+    printf 'Vulkan runtime unavailable; falling back to the CPU profile.\n' >&2
+    TOGGL_CLASSIFIER_PROFILE=cpu _classifier_select_profile
+}
+
+_classifier_model_path() {
+    printf '%s/%s\n' "$MODEL_DIR" "$MODEL_FILE"
+}
+
+_embedder_model_path() {
+    printf '%s/%s\n' "$MODEL_DIR" "$EMBED_FILE"
+}
+
+_classifier_model_sha256() {
+    python3 - "$1" <<'PY'
+import hashlib
+import sys
+
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as handle:
+    for chunk in iter(lambda: handle.read(1048576), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+_classifier_download_named() {
+    # $1 file, $2 url, $3 size, $4 sha256 -- same verify-before-reuse and
+    # verify-after-download discipline for the chat model and the embedder.
+    local target="$MODEL_DIR/$1"
+    mkdir -p "$MODEL_DIR"
+    if [ -f "$target" ]; then
+        local existing_size
+        existing_size=$(stat -c%s "$target" 2>/dev/null || echo 0)
+        if [ "$existing_size" -eq "$3" ] && [ "$(_classifier_model_sha256 "$target")" = "$4" ]; then
+            printf 'Model already present and verified: %s\n' "$target" >&2
+            return 0
+        fi
+        printf 'Removing a model that failed verification: %s\n' "$target" >&2
+        rm -f -- "$target"
+    fi
+    local tmp="$target.part"
+    printf 'Downloading %s (%s MB)...\n' "$1" "$(( $3 / 1048576 ))" >&2
+    if ! python3 - "$2" "$tmp" <<'PY'
+import sys
+import urllib.request
+
+url, target = sys.argv[1:3]
+with urllib.request.urlopen(url, timeout=120) as response, open(target, "wb") as handle:
+    for chunk in iter(lambda: response.read(1048576), b""):
+        handle.write(chunk)
+PY
+    then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    if [ "$(stat -c%s "$tmp" 2>/dev/null || echo 0)" -ne "$3" ] || [ "$(_classifier_model_sha256 "$tmp")" != "$4" ]; then
+        printf 'Downloaded model failed verification; removing it.\n' >&2
+        rm -f -- "$tmp"
+        return 1
+    fi
+    mv -f -- "$tmp" "$target"
+    printf 'Model downloaded and verified: %s\n' "$target" >&2
+}
+
+_classifier_llama_server_path() {
+    if [ "$CLASSIFIER_PROFILE" = gpu ]; then
+        [ -x "$VULKAN_SERVER" ] && printf '%s\n' "$VULKAN_SERVER" && return 0
+        return 1
+    fi
+    # mise first, resolved to the real binary -- the shim execs `mise`, which a
+    # systemd --user unit cannot find on its own PATH.
+    if command -v mise >/dev/null 2>&1; then
+        local via_mise
+        via_mise=$(mise which llama-server 2>/dev/null || true)
+        if [ -n "$via_mise" ] && [ -x "$via_mise" ]; then
+            printf '%s\n' "$via_mise"
+            return 0
+        fi
+    fi
+    if command -v llama-server >/dev/null 2>&1; then
+        command -v llama-server
+        return 0
+    fi
+    if [ -x "$LLAMA_BIN_DIR/llama-server" ]; then
+        printf '%s/llama-server\n' "$LLAMA_BIN_DIR"
+        return 0
+    fi
+    return 1
+}
+
+_classifier_install_runtime_from_release() {
+    local asset_url
+    asset_url=$(python3 - <<'PY'
+import json
+import sys
+import urllib.error
+import urllib.request
+
+url = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+try:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        release = json.load(response)
+except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(1)
+for asset in release.get("assets", []):
+    name = asset.get("name", "").lower()
+    if "ubuntu" in name and name.endswith(("x64.zip", "x86_64.zip", "amd64.zip")):
+        print(asset["browser_download_url"])
+        break
+PY
+    ) || { printf 'Could not query the latest llama.cpp release.\n' >&2; return 1; }
+    if [ -z "$asset_url" ]; then
+        printf 'No matching llama.cpp Linux release asset was found.\n' >&2
+        return 1
+    fi
+    mkdir -p "$LLAMA_BIN_DIR"
+    local archive="$LLAMA_BIN_DIR/llama-cpp-release.zip"
+    if ! python3 - "$asset_url" "$archive" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+url, dest = sys.argv[1], sys.argv[2]
+try:
+    with urllib.request.urlopen(url, timeout=60) as response, open(dest, "wb") as handle:
+        handle.write(response.read())
+except (OSError, urllib.error.URLError) as error:
+    print(error, file=sys.stderr)
+    raise SystemExit(1)
+PY
+    then
+        rm -f -- "$archive"
+        printf 'Runtime download failed.\n' >&2
+        return 1
+    fi
+    if ! python3 - "$archive" "$LLAMA_BIN_DIR" <<'PY'
+import sys
+import zipfile
+
+archive, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(archive) as bundle:
+    for name in bundle.namelist():
+        if name.rsplit("/", 1)[-1] == "llama-server":
+            with bundle.open(name) as source, open(dest + "/llama-server", "wb") as target:
+                target.write(source.read())
+            break
+    else:
+        raise SystemExit("llama-server not found in the release archive")
+PY
+    then
+        rm -f -- "$archive"
+        printf 'Could not extract llama-server from the release archive.\n' >&2
+        return 1
+    fi
+    rm -f -- "$archive"
+    chmod 755 "$LLAMA_BIN_DIR/llama-server"
+    printf 'Installed llama-server to %s\n' "$LLAMA_BIN_DIR/llama-server" >&2
+}
+
+_classifier_install_runtime_from_package() {
+    # Spec 10.6: the distribution package where available. Arch's extra/llama-cpp
+    # ships llama-server. Needs sudo, so it is offered, never forced.
+    command -v pacman >/dev/null 2>&1 || return 1
+    pacman -Si llama-cpp >/dev/null 2>&1 || return 1
+    printf 'The llama-cpp package is available. Install it with sudo pacman? [y/N] ' >&2
+    IFS= read -r pkg_answer || pkg_answer=""
+    case "$pkg_answer" in
+        y|Y|yes|Yes) sudo pacman -S --needed --noconfirm llama-cpp && command -v llama-server >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+_classifier_install_runtime_from_mise() {
+    # mise knows llama.cpp natively (github:ggml-org/llama.cpp), downloads the
+    # release tarball, checks its checksum and verifies GitHub's artifact
+    # attestations. No sudo. Offered first when mise is present.
+    command -v mise >/dev/null 2>&1 || return 1
+    printf 'Install llama.cpp with mise (mise use -g llama.cpp@latest)? [Y/n] ' >&2
+    IFS= read -r mise_answer || mise_answer=""
+    case "$mise_answer" in
+        n|N|no|No) return 1 ;;
+        *) mise use -g llama.cpp@latest && _classifier_llama_server_path >/dev/null 2>&1 ;;
+    esac
+}
+
+_classifier_install_runtime_vulkan() {
+    if [ -x "$VULKAN_SERVER" ] && "$VULKAN_SERVER" --version >/dev/null 2>&1; then
+        printf 'Vulkan llama-server already installed: %s\n' "$VULKAN_SERVER" >&2
+        return 0
+    fi
+    local url archive
+    url="https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_RELEASE_TAG/llama-$LLAMA_RELEASE_TAG-bin-ubuntu-vulkan-x64.tar.gz"
+    mkdir -p "$VULKAN_DIR"
+    archive="$VULKAN_DIR/llama-cpp-vulkan.tar.gz"
+    printf 'Downloading llama.cpp %s (Vulkan build)...\n' "$LLAMA_RELEASE_TAG" >&2
+    if ! python3 - "$url" "$archive" "$VULKAN_DIR" <<'PY'
+import os
+import sys
+import tarfile
+import urllib.request
+
+url, archive, target = sys.argv[1:4]
+with urllib.request.urlopen(url, timeout=120) as response, open(archive, "wb") as handle:
+    for chunk in iter(lambda: response.read(1048576), b""):
+        handle.write(chunk)
+if os.path.getsize(archive) < 10_000_000:
+    raise SystemExit("archive too small to be a llama.cpp release")
+with tarfile.open(archive) as tar:
+    for member in tar.getmembers():
+        if member.name.startswith("/") or ".." in member.name.split("/"):
+            raise SystemExit("refusing archive with unsafe path: " + member.name)
+    tar.extractall(target)
+os.remove(archive)
+PY
+    then
+        rm -rf -- "$VULKAN_DIR"
+        return 1
+    fi
+    chmod 755 "$VULKAN_SERVER" 2>/dev/null || true
+    if ! "$VULKAN_SERVER" --version >/dev/null 2>&1; then
+        printf 'The Vulkan llama-server does not run on this machine.\n' >&2
+        rm -rf -- "$VULKAN_DIR"
+        return 1
+    fi
+    printf 'Installed Vulkan llama-server to %s\n' "$VULKAN_SERVER" >&2
+}
+
+_classifier_gpu_device() {
+    # On a hybrid laptop the Vulkan loader lists the integrated GPU first
+    # unless PRIME offload is requested; the first live install ran Qwen3-1.7B
+    # on the Intel iGPU at 10 tok/s instead of the RTX at 72 (ruling R-AM).
+    # Ask llama-server what it sees under the same environment the unit will
+    # run with, and pin the discrete device by name. One device: no pin.
+    local listing count pick
+    listing=$(__NV_PRIME_RENDER_OFFLOAD=1 GGML_VK_DISABLE_COOPMAT=1 "$VULKAN_SERVER" --list-devices 2>/dev/null | grep -E '^[[:space:]]+Vulkan[0-9]+:') || return 1
+    count=$(printf '%s\n' "$listing" | grep -c .)
+    [ "$count" -gt 1 ] || return 1
+    pick=$(printf '%s\n' "$listing" | grep -Ei 'NVIDIA|Radeon|AMD|Arc (A|B)[0-9]' | head -n 1)
+    [ -n "$pick" ] || pick=$(printf '%s\n' "$listing" | head -n 1)
+    printf '%s\n' "$pick" | sed -E 's/^[[:space:]]*(Vulkan[0-9]+):.*/\1/'
+}
+
+_classifier_install_runtime() {
+    if [ "$CLASSIFIER_PROFILE" = gpu ]; then
+        _classifier_install_runtime_vulkan && return 0
+        _classifier_fall_back_to_cpu
+    fi
+    if _classifier_llama_server_path >/dev/null 2>&1; then
+        printf 'llama-server already available: %s\n' "$(_classifier_llama_server_path)" >&2
+        return 0
+    fi
+    _classifier_install_runtime_from_mise && return 0
+    _classifier_install_runtime_from_package && return 0
+    printf 'Falling back to the upstream llama.cpp release binary.\n' >&2
+    _classifier_install_runtime_from_release
+}
+
+_embedder_install_unit() {
+    # A second llama-server: one process per model is the documented answer, and
+    # the embedder is CPU-only by design -- 35 MB has no claim on 4 GB of VRAM.
+    local llama_bin model_path
+    llama_bin=$(_classifier_llama_server_path) || return 1
+    model_path="$MODEL_DIR/$EMBED_FILE"
+    python3 "$script_dir/toggl_perf.py" --check-runtime "$llama_bin" embedding || return 1
+    mkdir -p "$SYSTEMD_UNIT_DIR"
+    cat > "$SYSTEMD_UNIT_DIR/$EMBED_UNIT_NAME" <<EOF
+[Unit]
+Description=Omarchy Toggl Track -- history embedder (llama-server)
+After=network-online.target
+
+[Service]
+Environment=MALLOC_ARENA_MAX=2
+Environment=MALLOC_TRIM_THRESHOLD_=131072
+Environment=MALLOC_MMAP_THRESHOLD_=131072
+ExecStart=$llama_bin --host 127.0.0.1 --port $EMBED_SERVER_PORT --model $model_path --alias toggl-embedder --embedding --pooling mean --ctx-size 512 --threads 4 --device none --n-gpu-layers 0 --parallel 1 --cache-ram 0 --sleep-idle-seconds 60
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    printf 'Installed the embedder unit: %s\n' "$SYSTEMD_UNIT_DIR/$EMBED_UNIT_NAME" >&2
+}
+
+_classifier_install_unit() {
+    local llama_bin model_path
+    llama_bin=$(_classifier_llama_server_path) || return 1
+    model_path=$(_classifier_model_path)
+    python3 "$script_dir/toggl_perf.py" --check-runtime "$llama_bin" description || return 1
+    local environment="# profile: $CLASSIFIER_PROFILE" gpu_flags="" device
+    if [ "$CLASSIFIER_PROFILE" = gpu ]; then
+        # Cooperative-matrix kernels return garbage on this class of driver
+        # (ruling R-AM); every other Vulkan knob measured the same as CPU.
+        # PRIME offload puts a discrete NVIDIA GPU first in the device list
+        # and is harmless everywhere else.
+        environment="Environment=GGML_VK_DISABLE_COOPMAT=1
+Environment=GGML_VK_DISABLE_COOPMAT2=1
+Environment=__NV_PRIME_RENDER_OFFLOAD=1"
+        gpu_flags=" --n-gpu-layers 99"
+        if device=$(_classifier_gpu_device); then
+            gpu_flags="$gpu_flags --device $device"
+            printf 'Pinned the classifier to Vulkan device %s\n' "$device" >&2
+        fi
+    fi
+    mkdir -p "$SYSTEMD_UNIT_DIR"
+    cat > "$SYSTEMD_UNIT_DIR/$SYSTEMD_UNIT_NAME" <<EOF
+[Unit]
+Description=Omarchy Toggl Track -- local classifier (llama-server)
+After=network-online.target
+
+[Service]
+Environment=MALLOC_ARENA_MAX=2
+Environment=MALLOC_TRIM_THRESHOLD_=131072
+Environment=MALLOC_MMAP_THRESHOLD_=131072
+$environment
+ExecStart=$llama_bin --host 127.0.0.1 --port $LLAMA_SERVER_PORT --model $model_path --alias toggl-classifier --ctx-size 4096 --threads 8 --parallel 1 --cache-ram 0 --sleep-idle-seconds 60$gpu_flags
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    printf 'Installed the systemd --user unit: %s\n' "$SYSTEMD_UNIT_DIR/$SYSTEMD_UNIT_NAME" >&2
+}
+
+_classifier_enable_unit() {
+    systemctl --user enable "$SYSTEMD_UNIT_NAME" "$EMBED_UNIT_NAME" >/dev/null
+    systemctl --user restart "$SYSTEMD_UNIT_NAME" "$EMBED_UNIT_NAME"
+    printf 'Enabled and (re)started %s and %s\n' "$SYSTEMD_UNIT_NAME" "$EMBED_UNIT_NAME" >&2
+}
+
+run_classifier_stage() {
+    if [ "$skip_classifier" -eq 1 ]; then
+        printf 'Classifier stage skipped (--skip-classifier).\n' >&2
+        return 0
+    fi
+    _classifier_select_profile
+    if [ "$with_classifier" -eq 0 ]; then
+        if [ ! -t 0 ]; then
+            printf 'No terminal attached; classifier stage declined by default.\n' >&2
+            printf 'Run setup again interactively, or with --classifier, to install it.\n' >&2
+            return 0
+        fi
+        printf '\nInstall the local classifier? It reads window titles locally to name and\n' >&2
+        if [ "$CLASSIFIER_PROFILE" = gpu ]; then
+            printf 'assign day blocks -- titles never leave this machine. Adds ~930 MB\n' >&2
+            printf '(Vulkan runtime + Granite 4.0 1B + bge-small) and two systemd --user\n' >&2
+            printf 'services. [y/N] ' >&2
+        else
+            printf 'assign day blocks -- titles never leave this machine. Adds ~930 MB\n' >&2
+            printf '(runtime + Granite 4.0 1B + bge-small) and two systemd --user\n' >&2
+            printf 'services. [y/N] ' >&2
+        fi
+        IFS= read -r answer || answer=""
+        case "$answer" in
+            y|Y|yes|Yes) ;;
+            *) printf 'Classifier skipped. Re-run setup to install it later.\n' >&2; return 0 ;;
+        esac
+    fi
+    _classifier_install_runtime || { printf 'Could not install the llama-server runtime; classifier not installed.\n' >&2; return 1; }
+    _classifier_download_named "$MODEL_FILE" "$MODEL_URL" "$MODEL_SIZE" "$MODEL_SHA256" \
+        || { printf 'Model install failed; classifier not installed.\n' >&2; return 1; }
+    _classifier_download_named "$EMBED_FILE" "$EMBED_URL" "$EMBED_SIZE" "$EMBED_SHA256" \
+        || { printf 'Embedder model install failed; classifier not installed.\n' >&2; return 1; }
+    _classifier_install_unit || { printf 'Could not install the systemd unit; classifier not installed.\n' >&2; return 1; }
+    _embedder_install_unit || { printf 'Could not install the embedder unit; classifier not installed.\n' >&2; return 1; }
+    if [ "$with_classifier" -eq 1 ]; then
+        _classifier_enable_unit
+    else
+        printf 'Enable and start it now? [y/N] ' >&2
+        IFS= read -r enable_answer || enable_answer=""
+        case "$enable_answer" in
+            y|Y|yes|Yes) _classifier_enable_unit ;;
+            *) printf 'Unit installed but not started. Start it later with:\n  systemctl --user enable --now %s\n' "$SYSTEMD_UNIT_NAME" >&2 ;;
+        esac
+    fi
+    printf 'Classifier installed. Set classifier=local in the panel settings to use it.\n' >&2
+}
+
+# --- keyring ----------------------------------------------------------------
+# Omarchy's login keyring has no password, and a passwordless gnome-keyring is
+# not encrypted -- the token sits in ~/.local/share/keyrings in the clear, with
+# file permissions as its only protection. That is the platform's own default,
+# and it is what this script uses unless asked otherwise. --secure-keyring
+# moves the token to a collection with its own password, which is encrypted at
+# rest and needs unlocking once per session.
+
+secret() { python3 "$script_dir/toggl_secret.py" "$@"; }
+
+read_secret() {
+    # $1 prompt. Prints nothing; the caller reads the value from $REPLY_SECRET.
+    printf '%s' "$1" >&2
+    IFS= read -r -s REPLY_SECRET
+    printf '\n' >&2
+}
+
+read_new_password() {
+    read_secret 'Keyring password: '
+    local first="$REPLY_SECRET"
+    read_secret 'Repeat it: '
+    if [ "$first" != "$REPLY_SECRET" ]; then
+        REPLY_SECRET=""
+        printf 'The two passwords differ.\n' >&2
+        return 1
+    fi
+    if [ -z "$first" ]; then
+        printf 'An empty password would leave the keyring unencrypted.\n' >&2
+        return 1
+    fi
+    REPLY_SECRET="$first"
+}
+
+current_token() {
+    secret-tool lookup service daz.toggl-track account api-token 2>/dev/null
+}
+
+keyring_unlock() {
+    read_secret 'Keyring password: '
+    printf '%s' "$REPLY_SECRET" | secret unlock || { REPLY_SECRET=""; return 1; }
+    REPLY_SECRET=""
+    printf 'Unlocked. It stays unlocked until you log out.\n' >&2
+}
+
+keyring_secure() {
+    if [ "$(secret mode)" = secure ]; then
+        # Already secure: nothing to move, but the collection may be locked and
+        # a lookup would then hang on a prompt rather than answer.
+        secret ready >/dev/null 2>&1 || keyring_unlock || return 1
+        printf 'The token is already in the protected keyring.\n' >&2
+        return 0
+    fi
+    token=$(current_token)
+    if [ -z "$token" ]; then
+        printf 'No token stored yet; run setup first.\n' >&2
+        return 1
+    fi
+    if secret path >/dev/null 2>&1; then
+        printf 'A protected keyring already exists; unlock it to reuse it.\n' >&2
+        keyring_unlock || { token=""; return 1; }
+        collection=$(secret path)
+    else
+        read_new_password || { token=""; return 1; }
+        collection=$(printf '%s' "$REPLY_SECRET" | secret create) || {
+            REPLY_SECRET=""; token=""
+            printf 'Could not create the protected keyring.\n' >&2
+            return 1
+        }
+        REPLY_SECRET=""
+    fi
+    # Clear before storing: `secret-tool clear` matches on attributes across
+    # every collection, so clearing afterwards would delete the copy just made.
+    secret-tool clear service daz.toggl-track account api-token >/dev/null 2>&1 || true
+    if ! printf '%s' "$token" | secret-tool store --collection="$collection" \
+            --label='Omarchy Toggl Track' service daz.toggl-track account api-token; then
+        # Put it back rather than leave the user with no token at all.
+        printf '%s' "$token" | secret-tool store --label='Omarchy Toggl Track' \
+            service daz.toggl-track account api-token >/dev/null 2>&1 || true
+        token=""
+        printf 'Could not move the token; it is still in the login keyring.\n' >&2
+        return 1
+    fi
+    token=""
+    secret set-mode secure
+    printf 'The token is now in a password-protected keyring, encrypted at rest.\n' >&2
+    printf 'It locks when you log out. Unlock it with: setup --unlock\n' >&2
+}
+
+keyring_plain() {
+    if [ "$(secret mode)" != secure ]; then
+        printf 'The token is already in the login keyring.\n' >&2
+        return 0
+    fi
+    secret ready >/dev/null 2>&1 || keyring_unlock || return 1
+    token=$(current_token)
+    if [ -z "$token" ]; then
+        printf 'No token found in the protected keyring.\n' >&2
+        return 1
+    fi
+    secret-tool clear service daz.toggl-track account api-token >/dev/null 2>&1 || true
+    if ! printf '%s' "$token" | secret-tool store --label='Omarchy Toggl Track' \
+            service daz.toggl-track account api-token; then
+        token=""
+        printf 'Could not move the token back.\n' >&2
+        return 1
+    fi
+    token=""
+    secret set-mode default
+    secret delete >/dev/null 2>&1 || true
+    printf 'The token is back in the login keyring, which on Omarchy is not\n' >&2
+    printf 'encrypted at rest. Only file permissions protect it now.\n' >&2
+}
+
+run_doctor() {
+    if [ "$offline" -eq 1 ]; then
+        python3 "$script_dir/toggl_doctor.py" --offline
+    else
+        python3 "$script_dir/toggl_doctor.py"
+    fi
+}
+
+main() {
+    if [ "$update_runtime" -eq 1 ]; then
+        python3 "$script_dir/toggl_perf.py"
+        return
+    fi
+    if [ "$unlock_only" -eq 1 ]; then keyring_unlock; return; fi
+    if [ "$secure_keyring" -eq 1 ]; then keyring_secure; return; fi
+    if [ "$plain_keyring" -eq 1 ]; then keyring_plain; return; fi
+    if [ "$check_only" -eq 1 ]; then run_doctor; return; fi
+    # A locked protected keyring makes every lookup below hang on a GUI prompt.
+    if [ "$(secret mode 2>/dev/null || echo default)" = secure ]; then
+        secret ready >/dev/null 2>&1 || keyring_unlock || exit 1
+    fi
+    if [ "$reset" -eq 0 ] && secret-tool lookup service daz.toggl-track account api-token >/dev/null 2>&1; then
+        printf 'Toggl token already stored; keeping it. Pass --reset to replace it.\n' >&2
+    else
+        printf '%s' 'Toggl API token: ' >&2
+        IFS= read -r -s token
+        printf '\n' >&2
+        if [ -z "$token" ]; then
+            printf '%s\n' 'No token entered.' >&2
+            exit 1
+        fi
+        if ! printf '%s' "$token" | secret-tool store --label='Omarchy Toggl Track' service daz.toggl-track account api-token >/dev/null 2>&1; then
+            unset token
+            printf '%s\n' 'Could not store the Toggl token.' >&2
+            exit 1
+        fi
+        unset token
+        if ! printf '%s\n' '{"action":"bootstrap","skip_sync":true}' | python3 "$script_dir/toggl_api.py" >/dev/null 2>&1; then
+            secret-tool clear service daz.toggl-track account api-token >/dev/null 2>&1 || true
+            printf '%s\n' 'Toggl token validation failed; stored token cleared.' >&2
+            exit 1
+        fi
+        printf '%s\n' 'Toggl token stored and validated.' >&2
+    fi
+
+    run_classifier_stage
+
+    # End by saying what actually works. An install that finishes silently
+    # leaves the first failure to be discovered in the panel, where the only
+    # evidence is one line of red text.
+    printf '\n--- checking every dependency ---\n' >&2
+    run_doctor || true
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main
+fi

@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.omc/
+.superpowers/
+logs/
+dist/
+*.gguf
+
+# capture intermediates
+docs/images/baseline.png
+docs/images/full-*.png
