@@ -106,10 +106,9 @@ remain browser-extension features. This plugin provides the native timer workflo
 - A Toggl Track API token
 - For the Day tab: a running ActivityWatch server on `http://127.0.0.1:5600`
   exposing `currentwindow` and `afkstatus` buckets. **This is not part of
-  Omarchy** — install ActivityWatch yourself (`aw-server-rust` and
-  `aw-awatcher` as `systemd --user` services), or let the Omalog plugin
-  install and manage them. A `web.tab.current` bucket, if present, adds
-  browser domains.
+  Omarchy**, so `setup` offers to install it — see
+  [ActivityWatch](#activitywatch) below. A `web.tab.current` bucket, if
+  present, adds browser domains.
 - For `setup --secure-keyring` only: `python-gobject` — also in Omarchy's base
   install
 - For the optional local classifier: `systemd --user`, and either the
@@ -188,6 +187,31 @@ graphical prompt, so the plugin refuses instead and tells you to run `setup
 Polkit is not involved and would not help. Polkit authorises *privileged*
 actions; an API token is an ordinary user secret with no privilege boundary to
 cross. The Secret Service API is the right mechanism, and it is the one in use.
+
+## ActivityWatch
+
+The Day scope reads a local ActivityWatch server. Omarchy does not ship one, so
+`setup` offers to install it when nothing answers on `http://127.0.0.1:5600`,
+and `setup --activitywatch` installs it on its own. `--skip-activitywatch`
+declines without being asked, and a non-interactive `setup` never installs it.
+
+Two pieces, neither needing elevated privileges:
+
+- **awatcher** through mise (`mise use -g github:2e3s/awatcher`), because the
+  Python watchers in the official bundle cannot see Wayland windows, which is
+  the whole point here. Without mise, the pinned release asset is downloaded
+  and checked against its published SHA-256 instead.
+- **aw-server-rust**, which publishes no releases of its own and so comes out
+  of the official ActivityWatch bundle: a 198 MB download for the one 29 MB
+  binary it contains. The prompt says so before fetching anything. It is
+  pinned by size and SHA-256, and that SHA-256's MD5 matches the one the AUR's
+  `activitywatch-bin` package publishes independently.
+
+Both land in `$XDG_DATA_HOME/omarchy-toggl-track/bin`, with two `systemd --user`
+units to run them. **Existing unit files are never overwritten.** If you already
+have ActivityWatch — from your distribution, or from the Omalog plugin, which
+installs the same two services — setup leaves its units exactly as they are.
+Two servers on port 5600 is worse than one of them being a version behind.
 
 ## Local classifier (optional)
 

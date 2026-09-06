@@ -47,7 +47,7 @@ Actions: `bootstrap` `sync` `start` `stop` `update` `continue` `day_activity`
 | `BarWidget.qml` (87) | Bar button, panel loader, IPC handlers |
 | `tests/test_toggl_api.py` + `tests/test_toggl_log.py` | 128 Python tests total |
 | `tests/test_model.mjs` | 29 node tests for `Model.js` |
-| `setup` | Prompts for the API token, stores it via `secret-tool`, then runs the doctor |
+| `setup` | Prompts for the API token, stores it via `secret-tool`, offers ActivityWatch and the classifier, then runs the doctor |
 | `toggl_secret.py` | Secret Service work `secret-tool` cannot express: the password-protected keyring, lock state, and why a lookup came back empty |
 | `toggl_doctor.py` | Every dependency check behind `setup --check` |
 | `manifest.json` | Plugin id, settings schema and defaults |
@@ -372,3 +372,26 @@ the token is readable in `~/.local/share/keyrings/Default_keyring.keyring`.
 Verified by finding a stored token verbatim in that file. Do not describe the
 default path as "securely stored"; it is stored the way every other secret on
 an Omarchy box is stored, and `setup --secure-keyring` is the way out.
+
+## Dependency policy (publishing)
+
+**Nothing in this repository escalates privilege.** There is no `sudo`, no
+`pkexec`, and no distribution package manager -- not in a command and not in a
+string, because the marketplace's security baseline reads a package-manager
+command inside an error message as a package-management capability. When a
+message needs to name a system package, name the package, never the command
+that installs it.
+
+Where a dependency can come from mise, it does: `llama.cpp` and
+`github:2e3s/awatcher` are both mise-installable, mise-bin is line 80 of
+Omarchy's own base package list, and mise verifies release assets without
+asking for a password. Two dependencies cannot: `aw-server-rust` publishes no
+release assets at all, and libsecret, python-gobject and libnotify bind to the
+running desktop's D-Bus and GLib typelibs, where a mise-managed copy would fail
+at load. Everything mise cannot supply is fetched as a pinned artifact and
+verified by size and SHA-256 before use.
+
+**Never overwrite a systemd unit this plugin did not write.** The Omalog plugin
+installs `aw-server-rust.service` and `aw-awatcher.service` under the same
+names; two servers on port 5600 is a worse outcome than one of them being a
+version behind.

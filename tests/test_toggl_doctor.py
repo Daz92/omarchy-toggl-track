@@ -117,7 +117,7 @@ class ActivityWatchTests(unittest.TestCase):
     def test_a_server_that_is_not_running_names_what_to_install(self):
         report = self._check([("/api/0/info", OSError("connection refused"))])
         self.assertEqual(statuses(report)["server"], toggl_doctor.FAIL)
-        self.assertIn("aw-server-rust", detail(report, "server"))
+        self.assertIn("setup --activitywatch", detail(report, "server"))
 
     def test_a_missing_required_bucket_fails_and_a_missing_optional_one_warns(self):
         report = self._check([

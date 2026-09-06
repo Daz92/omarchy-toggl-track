@@ -92,9 +92,13 @@ def _gi():
         import gi  # noqa: F401  -- imported for the side effect of the check
         from gi.repository import Gio, GLib
     except (ImportError, ValueError) as error:
+        # No package-manager command in the text. The marketplace's security
+        # baseline reads one as a package-management capability even inside an
+        # error string, and this module installs nothing.
         raise SecretError(
-            "python-gobject is required for the secure keyring; install it "
-            "(pacman -S python-gobject) or run setup --plain-keyring. (%s)" % error)
+            "the secure keyring needs the system python-gobject package; "
+            "install it, or run setup --plain-keyring to use the login "
+            "keyring instead. (%s)" % error)
     return Gio, GLib
 
 

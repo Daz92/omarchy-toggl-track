@@ -159,9 +159,9 @@ def check_activitywatch(report):
         _get(ACTIVITYWATCH_URL + "/api/0/info")
     except (urllib.error.URLError, OSError, ValueError) as error:
         report.add("ActivityWatch", "server", FAIL,
-                   "%s is not answering (%s). The Day scope needs it; install "
-                   "ActivityWatch (aw-server-rust + aw-awatcher) or the Omalog "
-                   "plugin, which manages them." % (ACTIVITYWATCH_URL, error))
+                   "%s is not answering (%s). The Day scope needs it; run "
+                   "setup --activitywatch to install it, or start the "
+                   "ActivityWatch you already have." % (ACTIVITYWATCH_URL, error))
         return
     report.add("ActivityWatch", "server", OK, ACTIVITYWATCH_URL + " is answering")
 
