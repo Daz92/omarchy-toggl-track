@@ -14,6 +14,13 @@ Panel {
     // What was on screen when the user hit apply, so the backend can
     // record whether they kept it or corrected it (ruling R-AP).
     // Optional enrichment cannot turn a working panel into an error.
+    // An entry stopped in the web app leaves the bar painting a timer
+    // that is already over, and the only thing that noticed was ^s
+    // coming back 404 -- thirteen times in the shipped log. Opening
+    // the panel re-reads what Toggl actually has.
+    // ^r must reach ActivityWatch. The backend's ten-minute day cache
+    // otherwise answered a manual reload from disk, so the last ten
+    // minutes of work could not be made to appear at all.
 
     id: root
 
@@ -85,6 +92,11 @@ Panel {
     property bool dayLoaded: false
     property int dayRevision: 0
     property var applyQueue: []
+    // The block a create_entry is in flight for. pendingSlot() used to answer
+    // "the first busy row in the current dayBlocks", which is a different row
+    // -- or none at all -- the moment a reload replaces the array mid-write:
+    // the entry reached Toggl and the row never left ◍.
+    property var pendingApplyBlock: null
     // Local classifier (spec 10.4-10.6): "off" or "local". Persisted. Nothing
     // it produces reaches Toggl without a confirmation.
     readonly property var classifierChoices: ["off", "local"]
@@ -165,7 +177,8 @@ Panel {
         helpOpen = false;
         if (!current && status === "idle")
             bootstrap(false);
-
+        else if (selectedWorkspaceId > 0 && !requestPending)
+            sync(false, false);
         Qt.callLater(function() {
             cmdInput.forceActiveFocus();
         });
@@ -422,23 +435,6 @@ Panel {
         }
         enrichmentActive = null;
         pumpEnrichment();
-    }
-
-    // A late response can never clobber an edit: classifyGuessFor refuses once
-    // the user has typed, picked a project, applied, or been guessed already.
-    function applyClassifyResults(results) {
-        (results || []).forEach(function(result) {
-            var block = dayBlocks[result.index];
-            var guess = block && Model.classifyGuessFor(block, result, projects);
-            if (!guess)
-                return ;
-
-            mutateBlock(block, function() {
-                block.description = guess.description;
-                block.projectId = guess.projectId;
-                block.guessed = guess.guessed;
-            });
-        });
     }
 
     function chooseWorkspace() {
@@ -793,11 +789,11 @@ Panel {
             return ;
         }
         if (root.scope === "day") {
-            // Enter on the day list applies the cursor row when it is ready
-            // (spec 7.5). Text in the field is a filter, not a description, so
-            // Enter with text typed does nothing rather than start a timer.
+            // Enter on the day list acts on the cursor row. Text in the field
+            // is a filter, not a description, so Enter with text typed does
+            // nothing rather than start a timer.
             if (root.commandText === "")
-                root.applyBlock(root.dayCursorBlock());
+                root.activateBlock(root.dayCursorBlock());
 
             return ;
         }
@@ -829,7 +825,7 @@ Panel {
         return bar && typeof bar.switchPanelFrom === "function" ? bar.switchPanelFrom(barIdentity, direction) : false;
     }
 
-    function loadDay() {
+    function loadDay(forceRefresh) {
         if (selectedWorkspaceId <= 0) {
             noteClient("errors", "request_dropped", "day_activity");
             return ;
@@ -838,7 +834,8 @@ Panel {
         request("day_activity", {
             "workspace_id": selectedWorkspaceId,
             "date": dayDate,
-            "min_block_minutes": dayBlockMinutes
+            "min_block_minutes": dayBlockMinutes,
+            "force_refresh": !!forceRefresh
         });
     }
 
@@ -902,7 +899,11 @@ Panel {
     }
 
     function toggleEdit(block) {
-        if (!block)
+        // Nothing in the edit drawer can reach Toggl for a row an entry
+        // already covers: APPLY stays disabled and Enter is a silent no-op,
+        // because Model.blockReady requires state "pending". Opening it there
+        // offered an editor that could never save.
+        if (!block || (block.state !== "pending" && !block.editing))
             return ;
 
         mutateBlock(block, function() {
@@ -947,28 +948,32 @@ Panel {
     // "@acme/backend" binds both; a fragment ranks fuzzily and takes the top
     // hit, exactly as the command line's PROJ rows would.
     function resolveBlockToken(block, text) {
-        var parsed = Model.parseCommand(String(text || ""), root.projects, root.tasks, root.tags);
-        var projectId = parsed.projectId;
-        var taskId = parsed.taskId;
-        if (!projectId) {
-            var frag = String(text || "").replace(/^\s*@/, "").split("/")[0];
-            var top = Model.rankProjects(root.projects, frag)[0];
-            if (top)
-                projectId = Number(top.id) || 0;
+        // Model.resolveToken is the same call the field's live hint makes, so
+        // what the hint showed is what lands here. It binds nothing for an
+        // empty fragment; the old inline version ranked every project for a
+        // bare "@" and bound whichever sorted first.
+        var resolved = Model.resolveToken(text, root.projects, root.tasks, root.tags);
+        if (!resolved.projectId && String(text || "").trim() !== "")
+            return ;
 
-        }
-        if (projectId && !taskId) {
-            var tfrag = String(text || "").indexOf("/") !== -1 ? String(text || "").split("/").pop() : "";
-            if (tfrag) {
-                var ttop = Model.rankTasks(root.tasks, projectId, tfrag)[0];
-                if (ttop)
-                    taskId = Number(ttop.id) || 0;
-
-            }
-        }
         mutateBlock(block, function() {
-            block.projectId = projectId;
-            block.taskId = taskId;
+            block.projectId = resolved.projectId;
+            block.taskId = resolved.taskId;
+            confirmGuess(block);
+        });
+    }
+
+    // A row picked from the edit drawer's suggestion list. Unlike typing, this
+    // is an explicit choice, so the canonical name replaces whatever fragment
+    // was typed and stays in the field.
+    function pickBlockToken(block, suggestion) {
+        if (!block || !suggestion)
+            return ;
+
+        mutateBlock(block, function() {
+            block.tokenDraft = suggestion.token;
+            block.projectId = Number(suggestion.projectId) || 0;
+            block.taskId = Number(suggestion.taskId) || 0;
             confirmGuess(block);
         });
     }
@@ -1006,6 +1011,7 @@ Panel {
             block.busy = true;
             block.failure = "";
         });
+        root.pendingApplyBlock = block;
         request("create_entry", {
             "workspace_id": selectedWorkspaceId,
             "start": block.start,
@@ -1038,6 +1044,24 @@ Panel {
         return false;
     }
 
+    // What ↵ does to the cursor row. A guess has to be reviewed before it can
+    // be written (spec 7.5), and opening the edit drawer was the only thing
+    // that counted as review -- so on a real day, where the classifier names
+    // most rows, ↵ was inert on nearly every row while the hint bar went on
+    // offering "↵ apply". The first press now confirms and the second writes.
+    function activateBlock(block) {
+        if (!block)
+            return ;
+
+        if (block.state === "pending" && block.guessed) {
+            mutateBlock(block, function() {
+                confirmGuess(block);
+            });
+            return ;
+        }
+        applyBlock(block);
+    }
+
     function applyBlock(block) {
         if (requestPending || !blockReady(block))
             return ;
@@ -1056,6 +1080,9 @@ Panel {
     }
 
     function finishBlock(block, state, failure) {
+        if (block === root.pendingApplyBlock)
+            root.pendingApplyBlock = null;
+
         if (!block)
             return ;
 
@@ -1067,12 +1094,7 @@ Panel {
     }
 
     function pendingSlot() {
-        for (var i = 0; i < dayBlocks.length; i++) {
-            if (dayBlocks[i].busy)
-                return dayBlocks[i];
-
-        }
-        return null;
+        return root.pendingApplyBlock;
     }
 
     function handleResponse(raw) {
@@ -1108,17 +1130,12 @@ Panel {
                     calendarError = message;
                     return ;
                 }
-                if (action === "classify") {
-                    // The backend already degrades to ok:true on every transport
-                    // failure; this is only a validation error, and even that
-                    // must not surface -- the day is loaded and editable.
-                    status = "ready";
-                    return ;
-                }
                 if (action === "create_entry") {
                     status = "ready";
                     finishBlock(pendingSlot(), "pending", message);
-                    pumpApplyQueue();
+                    if (!pumpApplyQueue())
+                        classifyDay();
+
                     return ;
                 }
                 errorStatus = Number((response.error || {
@@ -1147,7 +1164,9 @@ Panel {
             }
             if (action === "day_activity") {
                 status = "ready";
-                var prepared = Model.prepareBlocks(response.data.blocks, response.data.entries);
+                var cachedForDate = calendarBlocksByDate[response.data.date];
+                var previousBlocks = response.data.date === dayDate ? dayBlocks : (cachedForDate ? cachedForDate.prepared : []);
+                var prepared = Model.prepareBlocks(response.data.blocks, response.data.entries, previousBlocks);
                 var rawBlocks = Array.isArray(response.data.blocks) ? response.data.blocks : [];
                 // Cache every day's blocks for the calendar, keyed by the
                 // response's own date -- several may be in flight in sequence.
@@ -1166,18 +1185,19 @@ Panel {
                     // and the classifier leaves guessed blocks alone.
                     Model.applyHistoryGuesses(prepared);
                     Model.applyProjectGuesses(prepared, projects);
+                    // prepared holds new objects, so everything the apply
+                    // queue still points at belongs to the array just
+                    // discarded. Mutating those is invisible; carrying them
+                    // forward would write entries for rows no longer shown.
+                    if (applyQueue.length > 0) {
+                        noteClient("errors", "apply_queue_dropped", String(applyQueue.length));
+                        applyQueue = [];
+                    }
                     dayBlocks = prepared;
                     daySummary = Model.blockSummary(dayBlocks);
                     slotChanged();
                     classifyDay();
                 }
-                return ;
-            }
-            if (action === "classify") {
-                status = "ready";
-                if (response.data)
-                    applyClassifyResults(response.data.results);
-
                 return ;
             }
             if (action === "range_entries") {
@@ -1192,8 +1212,13 @@ Panel {
             if (action === "create_entry") {
                 status = "ready";
                 finishBlock(pendingSlot(), "applied", "");
-                classifyDay();
-                pumpApplyQueue();
+                // enrich_day is a second process and the log measures it at
+                // 10-17s. Running it after every written row meant an
+                // eight-row batch queued eight of them; the queue is drained
+                // first and the day is classified once at the end.
+                if (!pumpApplyQueue())
+                    classifyDay();
+
                 return ;
             }
             status = "ready";
@@ -1372,23 +1397,50 @@ Panel {
 
     }
 
+    Timer {
+        // aiProc has had a deadline since stage 6; apiProc never did. A helper
+        // that hangs -- a locked keyring waiting on a gcr-prompter dialog, a
+        // stalled socket -- left requestPending true for the life of the
+        // panel, and request() silently enqueues everything after that, so the
+        // panel looked loading forever with no way back. The log has bootstrap
+        // runs of 70s, 19s and 11.8s, so this is not hypothetical.
+        id: apiDeadline
+
+        interval: 30000
+        repeat: false
+        onTriggered: {
+            apiProc.expired = true;
+            apiProc.running = false;
+        }
+    }
+
     Process {
         id: apiProc
 
         property string request: ""
+        property bool expired: false
 
         command: ["python3", String(Qt.resolvedUrl("toggl_api.py")).replace(/^file:\/\//, "")]
         stdinEnabled: true
         onStarted: {
             write(request + "\n");
             request = "";
+            expired = false;
+            apiDeadline.restart();
         }
         onExited: function(code) {
-            if (code !== 0 && root.requestPending) {
+            apiDeadline.stop();
+            if ((code !== 0 || apiProc.expired) && root.requestPending) {
+                var action = root.pendingAction;
                 root.requestPending = false;
                 root.manualRefresh = false;
                 root.status = "error";
-                root.errorMessage = "The Toggl helper is unavailable.";
+                root.errorMessage = apiProc.expired ? "The Toggl helper stopped responding." : "The Toggl helper is unavailable.";
+                // Without this the row that asked for the write stays ◍ busy
+                // for the rest of the session: nothing else ever clears it.
+                if (action === "create_entry")
+                    root.finishBlock(root.pendingSlot(), "pending", root.errorMessage);
+
                 if (root.lostClientLog.length > 0) {
                     root.clientLog = root.lostClientLog.concat(root.clientLog);
                     root.lostClientLog = [];
@@ -1516,6 +1568,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer"
                                 text: "WORKSPACE"
                                 color: panelTheme.textDisabled
@@ -1541,6 +1594,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer"
                                 text: "HISTORY (DAYS)"
                                 color: panelTheme.textDisabled
@@ -1561,6 +1615,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer"
                                 text: "IDLE REMINDER"
                                 color: panelTheme.textDisabled
@@ -1581,6 +1636,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer"
                                 text: "LOG DETAIL"
                                 color: panelTheme.textDisabled
@@ -1601,6 +1657,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer" && root.logLevel === "debug"
                                 Layout.fillWidth: true
                                 text: "Debug records window titles and entry descriptions in the plugin's log."
@@ -1611,6 +1668,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer"
                                 text: "CLASSIFIER"
                                 color: panelTheme.textDisabled
@@ -1632,6 +1690,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "timer" && root.classifier === "local"
                                 Layout.fillWidth: true
                                 text: "The local model reads window titles to name and assign day blocks. Titles never leave this machine. Install it with ./setup."
@@ -1642,6 +1701,7 @@ Panel {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 visible: root.scope === "day"
                                 text: "BREAK — a pause at least this long starts a new block"
                                 color: panelTheme.textDisabled
@@ -1696,6 +1756,7 @@ Panel {
                                 }
 
                                 Text {
+                                    textFormat: Text.PlainText
                                     text: root.elapsedLabel
                                     color: panelTheme.accent
                                     font.family: root.fontFamily
@@ -1704,6 +1765,7 @@ Panel {
                                 }
 
                                 Text {
+                                    textFormat: Text.PlainText
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
                                     text: root.current ? root.current.description : ""
@@ -1714,6 +1776,7 @@ Panel {
                                 }
 
                                 Text {
+                                    textFormat: Text.PlainText
                                     text: root.current ? (root.current.projectName + (root.current.taskName ? " \u00b7 " + root.current.taskName : "")) : ""
                                     // --dim18 -> textDisabled, not textFaint --
                                     // stage 2's colour table is authoritative
@@ -1771,6 +1834,7 @@ Panel {
                                     spacing: Style.spacing.rowGap
 
                                     Text {
+                                        textFormat: Text.PlainText
                                         text: "›"
                                         color: panelTheme.accent
                                         font.family: root.fontFamily
@@ -1790,6 +1854,13 @@ Panel {
                                             // the cursor row's description candidates
                                             // (ruling R-AP). Falls through to the panel
                                             // switch when there is no row to cycle.
+                                            // Consumed whether or not a row took it.
+                                            // cycleBlockDescription refuses every
+                                            // non-pending row, and falling through from
+                                            // there ran switchPanel -- so ⇥ on a
+                                            // conflict row left this plugin entirely and
+                                            // landed the user in another Omarchy panel,
+                                            // abandoning every unapplied edit on the day.
 
                                             id: cmdInput
 
@@ -1842,8 +1913,8 @@ Panel {
                                                     // only be a second copy of the same regex.
                                                     if (root.commandParsed.completion)
                                                         root.acceptCompletion();
-                                                    else if (root.scope === "day" && root.commandText.length === 0 && root.cycleBlockDescription((event.modifiers & Qt.ShiftModifier) || event.key === Qt.Key_Backtab ? -1 : 1))
-                                                        event.accepted = true;
+                                                    else if (root.scope === "day" && root.commandText.length === 0)
+                                                        root.cycleBlockDescription((event.modifiers & Qt.ShiftModifier) || event.key === Qt.Key_Backtab ? -1 : 1);
                                                     else
                                                         root.switchPanel((event.modifiers & Qt.ShiftModifier) || event.key === Qt.Key_Backtab ? -1 : 1);
                                                     event.accepted = true;
@@ -1986,7 +2057,7 @@ Panel {
                                                     event.accepted = true;
                                                 } else if (event.key === Qt.Key_R) {
                                                     if (root.scope === "day")
-                                                        root.loadDay();
+                                                        root.loadDay(true);
                                                     else
                                                         root.sync(true, false);
                                                 } else if (event.key === Qt.Key_Comma) {
@@ -2132,6 +2203,7 @@ Panel {
                                                 Text {
                                                     id: chipLabel
 
+                                                    textFormat: Text.PlainText
                                                     anchors.centerIn: parent
                                                     text: chip.modelData
                                                     // .scope span is --dim18 -> textDisabled, not
@@ -2168,7 +2240,7 @@ Panel {
                                     iconText: "?"
                                     tooltipText: "Keyboard help (^?)"
                                     size: Style.spacing.controlHeight
-                                    foreground: root.helpOpen ? Color.accent : panelTheme.textMuted
+                                    foreground: root.helpOpen ? panelTheme.accent : panelTheme.textMuted
                                     onClicked: root.helpOpen = !root.helpOpen
                                 }
 
@@ -2176,7 +2248,7 @@ Panel {
                                     iconText: "󰑐"
                                     tooltipText: root.scope === "day" ? "Reload day" : "Refresh"
                                     size: Style.spacing.controlHeight
-                                    foreground: Color.accent
+                                    foreground: panelTheme.accent
                                     onClicked: root.scope === "day" ? root.loadDay() : root.sync(true, false)
                                 }
 
@@ -2184,7 +2256,7 @@ Panel {
                                     iconText: "󰒓"
                                     tooltipText: root.settingsOpen ? "Hide settings" : "Settings"
                                     size: Style.spacing.controlHeight
-                                    foreground: root.settingsOpen ? Color.accent : panelTheme.textMuted
+                                    foreground: root.settingsOpen ? panelTheme.accent : panelTheme.textMuted
                                     onClicked: root.settingsOpen = !root.settingsOpen
                                 }
 
@@ -2192,7 +2264,7 @@ Panel {
                                     iconText: "󰖟"
                                     tooltipText: "Open Toggl web"
                                     size: Style.spacing.controlHeight
-                                    foreground: Color.accent
+                                    foreground: panelTheme.accent
                                     onClicked: root.openWeb()
                                 }
 

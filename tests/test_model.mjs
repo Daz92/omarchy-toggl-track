@@ -18,12 +18,14 @@ const Model = new Function(`${source}\nreturn {
   clampBlockMinutes, historyFloor, boundedShiftDate,
   searchItems, normalizeProject, normalizeTask, normalizeTag, scoreMatch,
   blockState, blockGlyph, blockReady, countLine, blockMeta, blockFacts, blockFilter, paletteIndex,
+  enterHint, applyAllHint, blockMetaIsFixed, appDisplayName,
   hourOfDay, axisBounds, axisOverrideValid, weekStart, monthStart, monthEnd, shiftMonths, calendarRangeBounds,
   shiftCalendarAnchor, canPageCalendarBackward, calendarGridDates, isoWeekLabel, shortDateLabel, calendarHeaderLabel,
   calendarFloorHint, calendarDayTotals, calendarRangeTotal, calendarConflictDates, calendarFilter,
   classifyBlockPayload, classifyProjectPayload, classifyGuessFor, guessProjectFromTopics, applyProjectGuesses, historyGuessFor, applyHistoryGuesses,
   descriptionCandidates, cycleDescription, suggestionFor, helpSections,
   parseCommand, commandSegments, clockDuration, rowDuration, commandRows,
+  resolveToken, tokenHint, tokenSuggestions, rankProjects, rankTasks, projectMeta,
   stripAtFragment, stripSlashFragment, bindProject, bindTask, bindingsAfterTextEdit
 }`)()
 
@@ -119,7 +121,7 @@ test("blockSummary counts total, ready, unassigned and applied", () => {
 })
 
 test("blockSummary tolerates empty input", () => {
-  assert.deepEqual(Model.blockSummary([]), { totalSeconds: 0, ready: 0, applicable: 0, unassigned: 0, applied: 0, conflicts: 0, skipped: 0 })
+  assert.deepEqual(Model.blockSummary([]), { totalSeconds: 0, ready: 0, guessed: 0, applicable: 0, unassigned: 0, applied: 0, conflicts: 0, skipped: 0 })
 })
 
 test("clampBlockMinutes accepts only offered choices", () => {
@@ -439,7 +441,9 @@ test("commandSegments: #tag and bare $ each get their own class", () => {
 })
 
 test("clockDuration: always hour-and-minutes, zero-padded, matching the guide's day rows", () => {
-  assert.equal(Model.clockDuration(0), "0h00")
+  // Ruling T-I: zero is an em dash, not a zero-valued duration.
+  assert.equal(Model.clockDuration(0), "—")
+  assert.equal(Model.clockDuration(29), "0h00", "a real but sub-minute span still measures")
   assert.equal(Model.clockDuration(3000), "0h50")
   assert.equal(Model.clockDuration(8700), "2h25")
   assert.equal(Model.clockDuration(29100), "8h05")
@@ -1201,22 +1205,42 @@ test("blockReady: a guess is never ready, a skipped row still is", () => {
   assert.equal(Model.blockReady(b), false)
 })
 
-test("blockSummary counts guesses as READY on the count line but not as applicable", () => {
+test("blockSummary counts a guessed row apart from a ready one", () => {
   const blocks = Model.prepareBlocks([guideBlock, guideBlock, guideBlock, guideBlock], [])
   blocks[0].projectId = 1
   blocks[1].projectId = 1; blocks[1].guessed = true
   blocks[2].skipped = true
   const s = Model.blockSummary(blocks)
-  assert.equal(s.ready, 2, "guide 02 renders both ● rows under READY")
+  assert.equal(s.ready, 1, "only the confirmed row is READY")
+  assert.equal(s.guessed, 1, "the unconfirmed guess has its own count")
   assert.equal(s.applicable, 1, "⇧↵ applies only the confirmed one")
+  assert.equal(s.ready, s.applicable, "READY and the apply count must never disagree")
   assert.equal(s.unassigned, 1)
   assert.equal(s.skipped, 1)
   assert.equal(s.totalSeconds, 8712 * 4, "R-N: a skipped block still counts toward the day")
 })
 
 test("countLine renders the guide's count line and omits zero categories", () => {
-  assert.equal(Model.countLine({ applied: 2, ready: 2, unassigned: 1, conflicts: 1, skipped: 0 }), "2 APPLIED · 2 READY · 1 UNASSIGNED · 1 CONFLICT")
+  assert.equal(Model.countLine({ applied: 2, ready: 2, unassigned: 1, conflicts: 1, skipped: 0 }), "2 READY · 1 UNASSIGNED · 1 CONFLICT")
   assert.equal(Model.countLine({ applied: 0, ready: 3, unassigned: 0, conflicts: 0, skipped: 0 }), "3 READY")
+  assert.equal(Model.countLine({ applied: 0, ready: 1, guessed: 4, unassigned: 0, conflicts: 0, skipped: 0 }), "1 READY · 4 GUESSED")
+})
+
+test("the count line drops whole segments rather than half a word", () => {
+  // Five segments overflowed the header and ElideLeft cut mid-token:
+  // "…PLIED · 1 GUESSED · 1 UNASSIGNED · 2 CONFLICT" was on screen.
+  const five = { applied: 1, ready: 1, guessed: 1, unassigned: 1, conflicts: 2, skipped: 0 }
+  assert.equal(Model.countLine(five), "1 GUESSED · 1 UNASSIGNED · 2 CONFLICT",
+               "what the reader can still act on is what survives")
+
+  const six = { applied: 1, ready: 0, guessed: 1, unassigned: 1, conflicts: 2, skipped: 3 }
+  assert.equal(Model.countLine(six), "1 GUESSED · 1 UNASSIGNED · 2 CONFLICT",
+               "finished work is what gives way, never the work still to do")
+
+  assert.equal(Model.countLine({ applied: 2, ready: 0, guessed: 0, unassigned: 0, conflicts: 1, skipped: 0 }),
+               "2 APPLIED · 1 CONFLICT", "under the cap nothing is dropped")
+  assert.equal(Model.countLine({ applied: 9, ready: 0, guessed: 0, unassigned: 0, conflicts: 0, skipped: 0 }),
+               "9 APPLIED", "a finished day still says so")
 })
 
 test("blockMeta gives applied and conflict different trailing text", () => {
@@ -1229,7 +1253,7 @@ test("blockMeta gives applied and conflict different trailing text", () => {
   b.busy = true
   assert.equal(Model.blockMeta(b, projects, tasks), "writing…")
   b = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: { id: 8 } }], [{ id: 8, created_with: "web" }])[0]
-  assert.equal(Model.blockMeta(b, projects, tasks), "conflict · manual")
+  assert.equal(Model.blockMeta(b, projects, tasks), "conflict")
 })
 
 test("blockFacts reproduces the guide's facts line", () => {
@@ -1693,6 +1717,297 @@ test("enrichment payload preserves real indices and changed activity invalidates
   assert.equal(payload[0].index, 1)
   blocks[1].topics.push({name: "new topic", seconds: 10})
   assert.equal(Model.mergeEnrichment(blocks[1], {signature: payload[0].signature}, null, []), false)
+})
+
+// --- ownership, and what a covered row is allowed to show -------------------
+//
+// No Toggl read endpoint returns created_with (verified 2026-09-14 against
+// /me/time_entries, the same with meta=true, and /me/time_entries/{id}). The
+// old test fed entries carrying the field, which the API never produces, so it
+// stayed green while every applied block in production rendered as CONFLICT
+// with the window title where the description belonged. These entries carry no
+// created_with, exactly like the real ones.
+
+const ownedConflict = { id: 7, description: "m4v-twincat development", project_id: 9, task_id: 3, created_with: "omarchy-toggl-track/day" }
+const foreignConflict = { id: 8, description: "Engineering Meeting", project_id: 9, task_id: 0, created_with: "" }
+
+test("a covered block is applied when the backend says the entry is ours", () => {
+  const b = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: ownedConflict }], [{ id: 7 }])[0]
+  assert.equal(b.state, "applied", "an entry list with no created_with must not force CONFLICT")
+})
+
+test("a covered block is a conflict when the entry is someone else's", () => {
+  const b = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: foreignConflict }], [{ id: 8 }])[0]
+  assert.equal(b.state, "conflict")
+})
+
+test("a covered row shows the entry's description, never the window title", () => {
+  const applied = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: ownedConflict }], [])[0]
+  assert.equal(applied.description, "m4v-twincat development")
+  assert.notEqual(applied.description, guideBlock.label)
+  const conflicted = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: foreignConflict }], [])[0]
+  assert.equal(conflicted.description, "Engineering Meeting")
+})
+
+test("a covered row carries the entry's own project and task", () => {
+  const b = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: ownedConflict }], [])[0]
+  assert.equal(b.projectId, 9)
+  assert.equal(b.taskId, 3)
+  const projects = [Model.normalizeProject({ id: 9, name: "acme", active: true })]
+  const tasks = [Model.normalizeTask({ id: 3, project_id: 9, name: "backend", active: true })]
+  assert.notEqual(Model.blockMeta(b, projects, tasks), "conflict")
+  assert.ok(Model.blockMeta(b, projects, tasks).indexOf("acme") >= 0, "an applied row names its project")
+})
+
+test("an entry list that still carries created_with is honoured as a fallback", () => {
+  const b = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: { id: 7, description: "x" } }],
+                                [{ id: 7, created_with: "omarchy-toggl-track/day" }])[0]
+  assert.equal(b.state, "applied", "a cached payload from before the conflict field existed still works")
+})
+
+// --- work in progress survives a reload -------------------------------------
+
+test("a reload keeps a description typed but not yet applied", () => {
+  const first = Model.prepareBlocks([guideBlock], [])
+  first[0].description = "tide model calibration"
+  first[0].projectId = 4
+  first[0].taskId = 2
+  first[0].skipped = true
+  first[0].tokenDraft = "@harb"
+  first[0].editRevision = 3
+  const second = Model.prepareBlocks([guideBlock], [], first)[0]
+  assert.equal(second.description, "tide model calibration")
+  assert.equal(second.projectId, 4)
+  assert.equal(second.taskId, 2)
+  assert.equal(second.skipped, true)
+  assert.equal(second.tokenDraft, "@harb")
+  assert.ok(second.editRevision > 0, "a restored row stays touched, so enrichment leaves it alone")
+})
+
+test("a reload does not resurrect a row the user never touched", () => {
+  const first = Model.prepareBlocks([guideBlock], [])
+  first[0].description = "classifier guess"
+  const second = Model.prepareBlocks([guideBlock], [], first)[0]
+  assert.equal(second.description, guideBlock.label, "editRevision 0 means nothing to carry")
+})
+
+test("a row that became covered while away takes the entry's text, not the draft", () => {
+  const first = Model.prepareBlocks([guideBlock], [])
+  first[0].description = "half typed"
+  first[0].editRevision = 1
+  const second = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: ownedConflict }], [], first)[0]
+  assert.equal(second.description, "m4v-twincat development")
+  assert.equal(second.state, "applied")
+})
+
+// --- the edit drawer's @project/task field ----------------------------------
+
+const tokenProjects = [
+  Model.normalizeProject({ id: 1, name: "Research and Development", active: true }),
+  Model.normalizeProject({ id: 2, name: "Harbour Works", active: true }),
+  Model.normalizeProject({ id: 3, name: "AVR Support Marine Platforms", active: true }),
+]
+const tokenTasks = [Model.normalizeTask({ id: 10, project_id: 1, name: "backend", active: true })]
+
+test("a bare @ binds nothing", () => {
+  // rankProjects("") ranks every project and returns them all, so taking [0]
+  // bound whichever sorted first. Verified live before the fix: typing "@" and
+  // tabbing out of the field attached "AVR Support Marine Platforms" to a
+  // block, with nothing on screen to say so.
+  assert.equal(Model.resolveToken("@", tokenProjects, tokenTasks, []).projectId, 0)
+  assert.equal(Model.resolveToken("", tokenProjects, tokenTasks, []).projectId, 0)
+  assert.equal(Model.resolveToken("@  ", tokenProjects, tokenTasks, []).projectId, 0)
+})
+
+test("a fragment binds the project it ranks first", () => {
+  assert.equal(Model.resolveToken("@res", tokenProjects, tokenTasks, []).projectId, 1)
+  assert.equal(Model.resolveToken("@harb", tokenProjects, tokenTasks, []).projectId, 2)
+})
+
+test("a fragment matching nothing binds nothing", () => {
+  assert.equal(Model.resolveToken("@zzzz", tokenProjects, tokenTasks, []).projectId, 0)
+})
+
+test("a slash binds the task under the project", () => {
+  const resolved = Model.resolveToken("@res/back", tokenProjects, tokenTasks, [])
+  assert.equal(resolved.projectId, 1)
+  assert.equal(resolved.taskId, 10)
+})
+
+test("the field's hint says what would bind, or why nothing would", () => {
+  assert.ok(Model.tokenHint("", tokenProjects, tokenTasks, []).indexOf("type @") >= 0)
+  assert.ok(Model.tokenHint("@", tokenProjects, tokenTasks, []).indexOf("type @") >= 0)
+  assert.ok(Model.tokenHint("@zzzz", tokenProjects, tokenTasks, []).indexOf("no project matches") >= 0)
+  assert.ok(Model.tokenHint("@res", tokenProjects, tokenTasks, []).indexOf("Research and Development") >= 0)
+})
+
+test("the hint and the commit path can never disagree", () => {
+  for (const text of ["@", "@res", "@harb/nope", "@res/back", "@zzzz"]) {
+    const resolved = Model.resolveToken(text, tokenProjects, tokenTasks, [])
+    const hint = Model.tokenHint(text, tokenProjects, tokenTasks, [])
+    const named = hint.indexOf("no project matches") < 0 && hint.indexOf("type @") < 0
+    assert.equal(named, resolved.projectId !== 0, `hint and binding disagree for ${text}`)
+  }
+})
+
+// --- the edit drawer's suggestion list --------------------------------------
+
+test("a bare @ offers every active project", () => {
+  const rows = Model.tokenSuggestions("@", tokenProjects, tokenTasks, 6)
+  assert.equal(rows.length, 3)
+  assert.deepEqual(rows.map((row) => row.projectId).sort(), [1, 2, 3])
+})
+
+test("offering a project is not the same as binding one", () => {
+  // The list may show every project for "@"; resolveToken must still refuse to
+  // pick one on its own. Conflating the two silently attached an arbitrary
+  // project to a block.
+  assert.ok(Model.tokenSuggestions("@", tokenProjects, tokenTasks, 6).length > 0)
+  assert.equal(Model.resolveToken("@", tokenProjects, tokenTasks, []).projectId, 0)
+})
+
+test("a fragment ranks the best match first", () => {
+  // rankProjects scores a subsequence, not a prefix, so "res" also reaches
+  // "AVR Support Marine Platforms". What the list owes the user is the right
+  // row at the top, not a list of one.
+  const rows = Model.tokenSuggestions("@res", tokenProjects, tokenTasks, 6)
+  assert.equal(rows[0].label, "Research and Development")
+  assert.equal(rows[0].projectId, 1)
+  assert.ok(rows.length < Model.tokenSuggestions("@", tokenProjects, tokenTasks, 6).length,
+            "a fragment has to drop something")
+})
+
+test("a picked row carries the whole name, not the fragment typed", () => {
+  const [row] = Model.tokenSuggestions("@res", tokenProjects, tokenTasks, 6)
+  assert.equal(row.token, "@Research and Development")
+  assert.equal(Model.resolveToken(row.token, tokenProjects, tokenTasks, []).projectId, 1)
+})
+
+test("a slash switches the list to the project's tasks", () => {
+  const rows = Model.tokenSuggestions("@res/", tokenProjects, tokenTasks, 6)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].label, "backend")
+  assert.equal(rows[0].taskId, 10)
+  assert.equal(rows[0].token, "@Research and Development/backend")
+  assert.equal(rows[0].detail, "Research and Development")
+})
+
+test("a picked task token resolves to both ids", () => {
+  const [row] = Model.tokenSuggestions("@res/back", tokenProjects, tokenTasks, 6)
+  const resolved = Model.resolveToken(row.token, tokenProjects, tokenTasks, [])
+  assert.equal(resolved.projectId, 1)
+  assert.equal(resolved.taskId, 10)
+})
+
+test("nothing is offered for text that is not a token", () => {
+  assert.deepEqual(Model.tokenSuggestions("", tokenProjects, tokenTasks, 6), [])
+  assert.deepEqual(Model.tokenSuggestions("research", tokenProjects, tokenTasks, 6), [])
+})
+
+test("nothing is offered for a fragment that matches nothing", () => {
+  assert.deepEqual(Model.tokenSuggestions("@zzzz", tokenProjects, tokenTasks, 6), [])
+  assert.deepEqual(Model.tokenSuggestions("@zzzz/x", tokenProjects, tokenTasks, 6), [])
+})
+
+test("an archived project is never offered", () => {
+  const withArchived = tokenProjects.concat([Model.normalizeProject({ id: 4, name: "Retired", active: false })])
+  for (const text of ["@", "@ret", "@retired"]) {
+    const rows = Model.tokenSuggestions(text, withArchived, tokenTasks, 6)
+    assert.ok(rows.every((row) => row.projectId !== 4), `archived project offered for ${text}`)
+  }
+})
+
+test("the list is capped at what the drawer can show", () => {
+  const many = []
+  for (let i = 0; i < 20; i += 1) many.push(Model.normalizeProject({ id: 100 + i, name: `Project ${i}`, active: true }))
+  assert.equal(Model.tokenSuggestions("@", many, [], 6).length, 6)
+})
+
+// --- what the hint bar promises ---------------------------------------------
+
+test("the enter hint never promises an action the key will not take", () => {
+  // Measured on a real day: 7 of 8 pending rows were classifier guesses, where
+  // Model.blockReady is false and ↵ did nothing at all -- while the bar read
+  // "↵ apply" on every one of them.
+  const guessed = Model.prepareBlocks([guideBlock], [])[0]
+  guessed.projectId = 1
+  guessed.guessed = true
+  assert.equal(Model.enterHint(guessed), "confirm")
+  assert.equal(Model.blockReady(guessed), false, "a guess is still not writable")
+
+  guessed.guessed = false
+  assert.equal(Model.enterHint(guessed), "apply")
+  assert.equal(Model.blockReady(guessed), true)
+
+  const unassigned = Model.prepareBlocks([guideBlock], [])[0]
+  assert.equal(Model.enterHint(unassigned), "needs a project")
+
+  const covered = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: ownedConflict }], [])[0]
+  assert.equal(Model.enterHint(covered), "written")
+
+  covered.busy = true
+  assert.equal(Model.enterHint(covered), "writing…")
+})
+
+test("confirming a guess is exactly what makes the row writable", () => {
+  const block = Model.prepareBlocks([guideBlock], [])[0]
+  block.projectId = 1
+  block.guessed = true
+  assert.equal(Model.blockReady(block), false)
+  block.guessed = false          // what Panel.activateBlock does on the first ↵
+  assert.equal(Model.blockReady(block), true)
+})
+
+test("apply-ready stays short enough for a bar that cannot elide", () => {
+  // Short on purpose: the hint bar cannot elide, so a long hint widens the
+  // panel and clips every row. GUESSED in the header carries the count, and
+  // ↵ reads "confirm" on such a row.
+  assert.equal(Model.applyAllHint({ applicable: 3, guessed: 0 }), "apply ready · 3")
+  assert.equal(Model.applyAllHint({ applicable: 0, guessed: 7 }), "apply ready · 0")
+  assert.equal(Model.applyAllHint({ applicable: 2, guessed: 5 }), "apply ready · 2")
+})
+
+// --- ruling T-H: app ids are shortened for reading, never for matching -------
+
+test("an app id is shortened to something a person recognises", () => {
+  assert.equal(Model.appDisplayName("com.mitchellh.ghostty"), "Ghostty")
+  assert.equal(Model.appDisplayName("md.obsidian.Obsidian"), "Obsidian")
+  assert.equal(Model.appDisplayName("org.gnome.Nautilus"), "Nautilus")
+  assert.equal(Model.appDisplayName("dev.zed.Zed"), "Zed")
+})
+
+test("a bare app name is only capitalised", () => {
+  assert.equal(Model.appDisplayName("zen"), "Zen")
+  assert.equal(Model.appDisplayName("slack"), "Slack")
+  assert.equal(Model.appDisplayName("winboat"), "Winboat")
+  assert.equal(Model.appDisplayName("Firefox"), "Firefox")
+})
+
+test("a chromium site window is named by its site", () => {
+  assert.equal(Model.appDisplayName("chrome-app.hey.com__-Default"), "hey.com")
+  assert.equal(Model.appDisplayName("chrome-onesteppower.atlassian.net__jira_software"), "onesteppower.atlassian.net")
+})
+
+test("appDisplayName is not for domains", () => {
+  // The last-segment rule would answer "Com". The APPS column is the only
+  // caller; _browser_app() and the history store still see the raw id.
+  assert.equal(Model.appDisplayName("calendar.google.com"), "Com")
+})
+
+// --- ruling T-B: which column is allowed to elide ---------------------------
+
+test("a closed-vocabulary trailing label is never the one that elides", () => {
+  const pending = Model.prepareBlocks([guideBlock], [])[0]
+  assert.equal(Model.blockMetaIsFixed(pending), true, "— unassigned — is a fixed label")
+
+  pending.projectId = 1
+  assert.equal(Model.blockMetaIsFixed(pending), false, "a project name is variable and may elide")
+
+  const covered = Model.prepareBlocks([{ ...guideBlock, applied: true, conflict: foreignConflict }], [])[0]
+  assert.equal(Model.blockMetaIsFixed(covered), true, "conflict is a fixed label")
+
+  pending.busy = true
+  assert.equal(Model.blockMetaIsFixed(pending), true, "writing… is fixed")
 })
 
 if (failures) {

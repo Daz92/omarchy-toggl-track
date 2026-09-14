@@ -42,6 +42,7 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             // The guide shows `Wed 3 Sep`, no year; dayLabel carries the year
             // for the BLOCK rows' "today / Fri 4 Sep 2026" meta.
             text: Model.dayLabel(root.dayDate).replace(/ \d{4}$/, "")
@@ -61,7 +62,7 @@ Item {
         }
 
         Button {
-            text: "TODAY"
+            text: "Today"
             visible: root.dayDate !== Model.todayDate()
             focusable: true
             bordered: true
@@ -75,6 +76,7 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             // `2 APPLIED · 2 READY · 1 UNASSIGNED · 1 CONFLICT` -- .dayhead .cnt is
             // --dim18 with letter-spacing 0.08em, caption size. One row with the
             // total (ruling R-AI): the count sits left of it, total on the far right.
@@ -83,7 +85,7 @@ Item {
             color: panelTheme.textDisabled
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
-            font.letterSpacing: 0.8
+            font.letterSpacing: 1
             elide: Text.ElideLeft
             Layout.fillWidth: true
             Layout.minimumWidth: 0
@@ -91,6 +93,7 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             // Model.blockSummary() · Style.font.title 14 · Color.accent (guide §02)
             Layout.leftMargin: 4
             text: Model.clockDuration(root.daySummary.totalSeconds)

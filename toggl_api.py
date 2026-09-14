@@ -78,6 +78,14 @@ MAX_TEXT = 500
 MAX_TIMELINE = 200
 MAX_TAGS = 50
 MAX_TAG = 100
+# How an entry says this plugin wrote it. `created_with` cannot: Toggl API v9
+# accepts it on a write and returns it on no read -- verified on 2026-09-14
+# against GET /me/time_entries, the same call with meta=true, and
+# GET /me/time_entries/{id}; none of the three carries the field. Reading it
+# back always yielded "", so every block this plugin had applied came back
+# looking like a foreign entry. A tag survives the round trip, so the tag is
+# what ownership is now read from.
+OWNER_TAG = "omarchy-toggl-track"
 ACCOUNT_TTL = timedelta(hours=24)
 WORKSPACE_TTL = timedelta(minutes=60)
 AW_BUCKETS_TTL = timedelta(hours=24)
@@ -532,6 +540,14 @@ _TITLE_SUFFIX = re.compile(
 )
 _TITLE_COUNTER = re.compile(r"^\(\d+\)\s*")
 _TITLE_DOCUMENT = re.compile(r"\s*-\s*Google (?:Docs|Sheets|Slides)\s*$", re.IGNORECASE)
+# A window title that is nothing but a URL. Ruling T-H: the query and the
+# fragment carry no meaning a person reads -- a whole block was labelled
+# "https://excalidraw.com/#room=dfb6f6f0dc51ca3..." -- and this label becomes
+# the proposed Toggl description, so it has to be worth writing down.
+_TITLE_URL = re.compile(
+    r"^(?:https?://)?((?:[\w-]+\.)+[\w-]+(?:/[^\s?#]*)?)(?:[?#]\S*)?$",
+    re.IGNORECASE,
+)
 
 # Shell surfaces that are on screen but are not work.
 _IGNORED_APPS = ("omarchy-screensaver", "org.omarchy.screensaver", "org.omarchy.lock")
@@ -546,6 +562,9 @@ def _topic(app, title):
     text = _TITLE_COUNTER.sub("", str(title or "").strip())
     text = _TITLE_SUFFIX.sub("", text)
     text = _TITLE_DOCUMENT.sub("", text).strip()
+    bare_url = _TITLE_URL.match(text)
+    if bare_url:
+        text = bare_url.group(1).rstrip("/")
     return (text or str(app or ""))[:MAX_TEXT]
 
 
@@ -2174,11 +2193,11 @@ class TogglAPI:
             result["current"] = self._current(project_names, task_names, client_names, project_clients, task_clients)
         return result
 
-    def _activitywatch_day(self, start, end, date_value):
+    def _activitywatch_day(self, start, end, date_value, force_refresh=False):
         store = self._store()
         now = self._now_datetime()
         cached = store.load("awday", date_value) if store else None
-        if cached is not None and now < cached[1]:
+        if cached is not None and not force_refresh and now < cached[1]:
             return cached[0]["payload"]
 
         bucket_ids = None
@@ -2225,6 +2244,41 @@ class TogglAPI:
                 "payload": events,
             }, date_value)
         return events
+
+    def _ensure_owner_tag(self, workspace_id):
+        """Create OWNER_TAG once, so a write can never fail for naming a tag
+        the workspace does not have. The cached workspace metadata already
+        lists every tag, so the common path costs no request at all; the helper
+        is one-shot per process, which is why the answer must come from the
+        cache and not from a per-process flag."""
+        store = self._store()
+        if store is None:
+            # No cache means no way to know whether the tag is there, and this
+            # is also every caching-disabled caller. Spending a write request
+            # on a guess is worse than letting the entry write carry the name.
+            return
+        cached = store.load("workspace", workspace_id)
+        if cached is not None:
+            names = [str(tag.get("name", "")) for tag in (cached[0].get("tags") or [])]
+            if OWNER_TAG in names:
+                return
+        try:
+            self.client.request(
+                "POST", "/workspaces/%d/tags" % workspace_id,
+                body={"name": OWNER_TAG, "workspace_id": workspace_id},
+                mutation=True,
+            )
+        except ApiError:
+            # Already there, or this workspace will not let us make one. Either
+            # way the entry write still carries the name and is worth trying.
+            _log(self.logger, "info", action="owner_tag", ok=False)
+
+    @staticmethod
+    def _owns(entry):
+        """Whether this plugin wrote the entry. See OWNER_TAG for why the
+        answer cannot come from created_with."""
+        tags = entry.get("tags")
+        return isinstance(tags, list) and OWNER_TAG in [str(tag) for tag in tags]
 
     @staticmethod
     def _entry_interval(entry):
@@ -2288,7 +2342,11 @@ class TogglAPI:
             raise ValidationError("date must be an ISO date (YYYY-MM-DD).")
         start, end = _day_bounds(date_value)
         min_block_minutes = _minutes(payload.get("min_block_minutes"), "min_block_minutes", 5)
-        activity = self._activitywatch_day(start, end, date_value)
+        # A manual reload must reach ActivityWatch. Without this the 10-minute
+        # AW_DAY_TTL answered ^r from cache and today's last ten minutes of
+        # work could not be made to appear at all.
+        force_refresh = _bool(payload.get("force_refresh", False), "force_refresh")
+        activity = self._activitywatch_day(start, end, date_value, force_refresh)
         supplied = payload.get("entries")
         if isinstance(supplied, list):
             entries = [item for item in supplied if isinstance(item, dict)]
@@ -2312,6 +2370,13 @@ class TogglAPI:
                         "description": entry.get("description", ""),
                         "start": entry.get("start", ""),
                         "stop": entry.get("stop", ""),
+                        # Spec 7.3 asks the conflict payload for the written
+                        # entry's created_with. The API will not give one back,
+                        # so this is synthesised from the ownership tag; QML
+                        # reads it and never has to look the entry up again.
+                        "created_with": "omarchy-toggl-track/day" if self._owns(entry) else "",
+                        "project_id": entry.get("project_id"),
+                        "task_id": entry.get("task_id"),
                     }
                     break
             block["applied"] = conflict is not None
@@ -2506,6 +2571,11 @@ class TogglAPI:
         if task_id is not None and project_id is None:
             raise ValidationError("project_id is required when task_id is supplied.")
         tags = _tags(payload.get("tags", []))
+        # The ownership marker (OWNER_TAG). Appended rather than replacing the
+        # user's tags, and only when the room is there -- a write that fails
+        # because the plugin added a 51st tag would cost the user the entry.
+        if OWNER_TAG not in tags and len(tags) < MAX_TAGS:
+            tags = tags + [OWNER_TAG]
         billable = _bool(payload.get("billable", False), "billable")
         start_datetime = _event_datetime(start)
         stop = _iso_datetime(start_datetime + timedelta(seconds=duration))
@@ -2528,6 +2598,7 @@ class TogglAPI:
             "billable": billable,
             "created_with": "omarchy-toggl-track/day",
         }
+        self._ensure_owner_tag(workspace_id)
         response = self.client.request(
             "POST", "/workspaces/%d/time_entries" % workspace_id, body=body, mutation=True
         )
@@ -2840,7 +2911,12 @@ def main():
     else:
         level = payload.get("log_level") if isinstance(payload, dict) else None
         try:
-            logger = toggl_log.Logger(PLUGIN_DIR, level if level in toggl_log.LEVELS else "info")
+            # A test that drives this file as a subprocess would otherwise
+            # append to the user's real install log: 301 of the 2393 lines in
+            # the shipped logs/toggl.jsonl came from one unit test, which is
+            # enough to make the log useless for diagnosing anything.
+            log_dir = os.environ.get("OMARCHY_TOGGL_LOG_DIR") or PLUGIN_DIR
+            logger = toggl_log.Logger(log_dir, level if level in toggl_log.LEVELS else "info")
         except Exception:
             logger = None
         # Documentation screenshots run the real panel against invented data.

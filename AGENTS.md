@@ -186,10 +186,27 @@ Block times are stored as UTC ISO strings; `Model.clockTime()` converts to local
 for display. `_day_bounds` computes local-day boundaries, so a "day" is not a
 UTC day.
 
-`applied` is set when a block overlaps *any* existing entry. QML separates the
-two real cases in `Model.prepareBlocks` by looking up the overlapping entry's
-`created_with`: ours (`omarchy-toggl-track/...`) renders as APPLIED, anything
-else as CONFLICT.
+`applied` is set when a block overlaps *any* existing entry. `day_activity`
+separates the two real cases by the overlapping entry's tags and hands QML the
+answer on `conflict.created_with`; `Model.prepareBlocks` reads that field.
+
+**Never try to read `created_with` back from Toggl.** API v9 accepts it on a
+write and returns it on *no* read. Measured 2026-09-14 against
+`GET /me/time_entries`, the same call with `meta=true`, and
+`GET /me/time_entries/{id}`: none of the three carries the field. The original
+design looked it up in the entries list, always got `""`, and so rendered
+**every** block this plugin had applied as a foreign CONFLICT -- in urgent red,
+with the ActivityWatch window title where the written description belonged. The
+entry was intact in Toggl the whole time. `OWNER_TAG` is the replacement: a tag
+is the only marker that survives the round trip, proven by writing an entry,
+reading it back and finding `created_with` gone and `tags` present. A test that
+feeds an entry carrying `created_with` is testing a shape the API never
+produces; `OwnershipTests` asserts the key is absent.
+
+**A row an entry already covers shows the entry's text, not the block label.**
+`prepareBlocks` takes `description`, `project_id` and `task_id` from the
+`conflict` payload. Falling back to `block.label` there is what made a written
+description look lost.
 
 ## GOTCHAS
 
@@ -210,6 +227,23 @@ eight extra lines.
 **`applyData()` clobbers `entries`.** It assigns from `data.entries`, which the
 `day_activity` response also carries. `handleResponse` therefore returns early for
 `day_activity` and `create_entry` *before* reaching `applyData`.
+
+**`apiProc` has a deadline; do not remove it.** Without `apiDeadline` a helper
+that hangs -- a locked keyring waiting on a `gcr-prompter` dialog, a stalled
+socket -- leaves `requestPending` true for the life of the panel, and
+`request()` then silently enqueues and coalesces everything after it. The
+shipped log has bootstrap runs of 70s, 19s and 11.8s, so the hang is real.
+
+**A `create_entry` response resolves through `pendingApplyBlock`, not by
+scanning for a busy row.** "The first busy block in the current `dayBlocks`" is
+a different row -- or none -- the moment a reload replaces the array mid-write,
+so the entry reached Toggl and the row stayed `◍` forever. A reload also drops
+`applyQueue`, whose entries all point into the array just discarded.
+
+**A test must not write into `logs/`.** Anything that drives `toggl_api.py` as
+a subprocess has to set `OMARCHY_TOGGL_LOG_DIR`. One unit test contributed 301
+of the 2393 lines in the shipped log before this was noticed, which is enough
+to make the log useless for diagnosing anything real.
 
 **`request()` drops calls while one is in flight.** It returns early if
 `requestPending`. Batch apply works around this with an explicit `applyQueue`

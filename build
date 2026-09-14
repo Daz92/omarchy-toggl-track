@@ -45,6 +45,58 @@ for file in Panel.qml ui/*.qml; do
     fi
 done
 
+say 'text rulings (T-A, T-B, T-C, T-E)'
+# T-A. Qt's default textFormat is AutoText, which renders a string as HTML when
+# it looks like HTML. Toggl descriptions, project names and window titles all
+# reach Text items, so a description of `<b>ship it</b>` renders bold and the
+# text the user typed is gone. Every Text declares its format.
+unset_format=$(python3 - <<'PY'
+import glob, re
+bad = []
+for name in ["Panel.qml"] + sorted(glob.glob("ui/*.qml")):
+    source = open(name).read()
+    for match in re.finditer(r"(?ms)^(\s*)(?:\w+:\s*)?Text \{\n(.*?)^\1\}", source):
+        if "textFormat:" not in match.group(2):
+            bad.append("%s:%d" % (name, source[:match.start()].count("\n") + 1))
+print(" ".join(bad))
+PY
+)
+[ -z "$unset_format" ] || die "Text without textFormat (ruling T-A): $unset_format"
+
+# T-B. An eliding Text that may fill must also be allowed to shrink, or the
+# layout hands it its implicit width and the ellipsis never appears.
+unpaired_elide=$(python3 - <<'PY'
+import glob, re
+bad = []
+for name in ["Panel.qml"] + sorted(glob.glob("ui/*.qml")):
+    source = open(name).read()
+    for match in re.finditer(r"(?ms)^(\s*)(?:\w+:\s*)?Text \{\n(.*?)^\1\}", source):
+        body = match.group(2)
+        if "elide: Text.Elide" in body and "ElideNone" not in body \
+                and "Layout.fillWidth: true" in body and "Layout.minimumWidth" not in body:
+            bad.append("%s:%d" % (name, source[:match.start()].count("\n") + 1))
+print(" ".join(bad))
+PY
+)
+[ -z "$unpaired_elide" ] || die "eliding Text without Layout.minimumWidth (ruling T-B): $unpaired_elide"
+
+# T-C. Two values only: 0 for sentence case, 1 for uppercase micro-labels.
+if grep -hoE 'font\.letterSpacing: [0-9.]+' Panel.qml ui/*.qml | grep -qvE 'font\.letterSpacing: [01]$'; then
+    die 'letterSpacing outside the 0/1 scale (ruling T-C)'
+fi
+
+# T-E. Uppercase is the metadata register; a control is sentence case.
+if grep -hE '^\s*text: "[A-Z][A-Z0-9 ]+"' Panel.qml ui/*.qml | grep -q .; then
+    if grep -rlE '^\s*text: "(APPLY|RETRY|TODAY|RESET|SAVE|CANCEL)"' Panel.qml ui/*.qml | grep -q .; then
+        die 'control label in caps (ruling T-E)'
+    fi
+fi
+
+# T-J. panelTheme is the only colour path outside the role object itself.
+if grep -nE '(^|[^.\w])Color\.' Panel.qml ui/DayScope.qml ui/TimerScope.qml ui/CalendarScope.qml ui/DayHeader.qml ui/HelpOverlay.qml | grep -vE '^\S+: *//| // '; then
+    die 'Color.* reached directly; use panelTheme.* (ruling T-J)'
+fi
+
 say 'BarWidget.qml needs hand review'
 printf '     both QML tools reject `function open(): void`, which IpcHandler requires\n' >&2
 

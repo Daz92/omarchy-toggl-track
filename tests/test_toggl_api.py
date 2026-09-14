@@ -102,12 +102,19 @@ def aw_opener(buckets, events):
 
 class TogglApiTests(unittest.TestCase):
     def test_process_frames_one_request_without_waiting_for_stdin_eof(self):
+        # OMARCHY_TOGGL_LOG_DIR keeps this out of the install's own log. Without
+        # it every run of this test appended to logs/toggl.jsonl, where 301 of
+        # the 2393 shipped lines turned out to be its "unsupported action."
+        log_root = tempfile.TemporaryDirectory(prefix="toggl-log-")
+        self.addCleanup(log_root.cleanup)
+        environment = dict(os.environ, OMARCHY_TOGGL_LOG_DIR=log_root.name)
         process = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve().parents[1] / "toggl_api.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=environment,
         )
         stdin = process.stdin
         stdout = process.stdout
@@ -2087,3 +2094,170 @@ class LearningHarnessTests(unittest.TestCase):
             out = api.dispatch({"action": "evaluate", "workspace_id": 4, "days": 2})
             self.assertEqual(out["samples"], 0)
             self.assertIn("note", out)
+
+
+class OwnershipTests(unittest.TestCase):
+    """Who wrote an entry, and how the answer survives a read.
+
+    Toggl API v9 accepts `created_with` on a write and returns it on no read --
+    verified on 2026-09-14 against GET /me/time_entries, the same call with
+    meta=true, and GET /me/time_entries/{id}. Reading it back always gave "",
+    so every block this plugin had applied came back looking like a foreign
+    entry and the row rendered CONFLICT with the window title in place of the
+    description the user had written. The entries in these tests carry no
+    `created_with` key at all, because the real ones do not.
+    """
+
+    @staticmethod
+    def _day(entry, cache_root=None, **extra):
+        buckets = [{"id": "windows", "type": "currentwindow"}, {"id": "afk", "type": "afkstatus"}]
+        opener = aw_opener(buckets, {
+            "window": [aw_event("2026-08-19T10:00:00Z", 600, {"app": "Editor", "title": "FreeRDP: 127.0.0.1"})],
+            "afk": [aw_event("2026-08-19T10:00:00Z", 600, {"status": "not-afk"})],
+            "web": [],
+        })
+        client = FakeClient([[entry]])
+        api = toggl_api.TogglAPI(client, cache_root=cache_root, activitywatch_opener=opener)
+        payload = {"action": "day_activity", "date": "2026-08-19", "workspace_id": 4}
+        payload.update(extra)
+        return api.dispatch(payload), client
+
+    @staticmethod
+    def _entry(**overrides):
+        entry = {
+            "id": 12, "workspace_id": 4,
+            "start": "2026-08-19T10:00:00Z", "stop": "2026-08-19T10:10:00Z",
+            "description": "m4v-twincat development", "project_id": 9, "task_id": 3,
+            "tags": [],
+        }
+        entry.update(overrides)
+        assert "created_with" not in entry, "no Toggl read endpoint returns created_with"
+        return entry
+
+    def test_our_own_entry_is_owned_by_its_tag(self):
+        result, _ = self._day(self._entry(tags=[toggl_api.OWNER_TAG]))
+        conflict = result["blocks"][0]["conflict"]
+        self.assertEqual(conflict["created_with"], "omarchy-toggl-track/day")
+
+    def test_a_foreign_entry_is_not_owned(self):
+        result, _ = self._day(self._entry(tags=["Engineering"]))
+        self.assertEqual(result["blocks"][0]["conflict"]["created_with"], "")
+
+    def test_an_untagged_entry_is_not_owned(self):
+        result, _ = self._day(self._entry())
+        self.assertEqual(result["blocks"][0]["conflict"]["created_with"], "")
+
+    def test_conflict_carries_what_the_row_has_to_render(self):
+        """The row shows the entry's own description and assignment. Falling
+        back to the block label is what made a written description look lost:
+        Toggl held "m4v-twincat development" and the row read
+        "FreeRDP: 127.0.0.1"."""
+        result, _ = self._day(self._entry(tags=[toggl_api.OWNER_TAG]))
+        conflict = result["blocks"][0]["conflict"]
+        self.assertEqual(conflict["description"], "m4v-twincat development")
+        self.assertEqual(conflict["project_id"], 9)
+        self.assertEqual(conflict["task_id"], 3)
+
+    def test_create_entry_appends_the_ownership_tag_to_the_users_own(self):
+        client = FakeClient([[], {"id": 7, "workspace_id": 4, "description": "history"}])
+        result = toggl_api.handle({
+            "action": "create_entry", "workspace_id": 4, "start": "2026-08-19T10:00:00Z",
+            "duration": 300, "description": "history", "tags": ["Engineering"], "billable": False,
+        }, client)
+        self.assertTrue(result["ok"])
+        self.assertEqual(client.calls[1][3]["tags"], ["Engineering", toggl_api.OWNER_TAG])
+
+    def test_create_entry_never_pushes_the_tag_list_over_the_limit(self):
+        """A write that failed because the plugin added a 51st tag would cost
+        the user the entry; the marker is the thing that gives way."""
+        tags = ["tag-%d" % index for index in range(toggl_api.MAX_TAGS)]
+        client = FakeClient([[], {"id": 7, "workspace_id": 4, "description": "history"}])
+        result = toggl_api.handle({
+            "action": "create_entry", "workspace_id": 4, "start": "2026-08-19T10:00:00Z",
+            "duration": 300, "description": "history", "tags": tags, "billable": False,
+        }, client)
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(client.calls[1][3]["tags"]), toggl_api.MAX_TAGS)
+        self.assertNotIn(toggl_api.OWNER_TAG, client.calls[1][3]["tags"])
+
+    def test_a_written_entry_reads_back_as_owned(self):
+        """End to end: what create_entry sends is what day_activity has to be
+        able to recognise. This is the pairing the created_with design failed."""
+        client = FakeClient([[], {"id": 7, "workspace_id": 4, "description": "history"}])
+        toggl_api.handle({
+            "action": "create_entry", "workspace_id": 4, "start": "2026-08-19T10:00:00Z",
+            "duration": 300, "description": "history", "tags": [], "billable": False,
+        }, client)
+        written = client.calls[1][3]
+        # The API drops created_with on the way back; the tags survive.
+        read_back = self._entry(tags=written["tags"], description=written["description"])
+        result, _ = self._day(read_back)
+        self.assertEqual(result["blocks"][0]["conflict"]["created_with"], "omarchy-toggl-track/day")
+
+
+class DayRefreshTests(unittest.TestCase):
+    def test_force_refresh_goes_back_to_activitywatch(self):
+        """^r on the Day tab was answered from the ten-minute AW_DAY_TTL cache,
+        so today's last ten minutes of work could not be made to appear at all.
+        CacheClient, not FakeClient: the metadata store only engages for a
+        client that carries an account_key, and without a store there is no
+        cache to bypass and the test would pass on nothing."""
+        seen = []
+
+        def opener(request, timeout):
+            url = getattr(request, "full_url", str(request))
+            seen.append(url)
+            if url.endswith("/api/0/buckets/"):
+                return Response([{"id": "windows", "type": "currentwindow"},
+                                 {"id": "afk", "type": "afkstatus"}])
+            if "windows" in url:
+                return Response([aw_event("2026-08-19T10:00:00Z", 600, {"app": "Editor", "title": "work"})])
+            if "afk" in url:
+                return Response([aw_event("2026-08-19T10:00:00Z", 600, {"status": "not-afk"})])
+            return Response([])
+
+        with tempfile.TemporaryDirectory(prefix="toggl-cache-") as cache_root:
+            def run(**extra):
+                seen.clear()
+                api = toggl_api.TogglAPI(cache_client(), cache_root=cache_root,
+                                         activitywatch_opener=opener)
+                payload = {"action": "day_activity", "date": "2026-08-19", "workspace_id": 4}
+                payload.update(extra)
+                api.dispatch(payload)
+                return len(seen)
+
+            self.assertGreater(run(), 0, "the first load has to ask ActivityWatch")
+            self.assertEqual(run(), 0, "a plain reload is answered from the day cache")
+            self.assertGreater(run(force_refresh=True), 0, "^r has to reach ActivityWatch")
+
+
+class TopicNormalisationTests(unittest.TestCase):
+    """Ruling T-H. A window title that is only a URL became the block's label,
+    and the label is what the Day tab proposes as the Toggl description -- so a
+    block read "https://excalidraw.com/#room=dfb6f6f0dc51ca3..." and would have
+    been written to Toggl that way."""
+
+    def test_a_bare_url_keeps_host_and_path_only(self):
+        self.assertEqual(
+            toggl_api._topic("zen", "https://excalidraw.com/#room=dfb6f6f0dc51ca3d8e9,abc"),
+            "excalidraw.com")
+        self.assertEqual(
+            toggl_api._topic("zen", "https://onesteppower.atlassian.net/jira/software/board?selectedIssue=M4V-1"),
+            "onesteppower.atlassian.net/jira/software/board")
+
+    def test_an_ordinary_title_is_untouched(self):
+        # The standing constraint from stage 5: an ordinary hyphenated title
+        # must survive _topic intact.
+        for title in ("nx8-server - Bitbucket",
+                      "M4V board - Kanban Board - Jira",
+                      "v1.2.3 release notes",
+                      "segment_blocks — toggl_api.py"):
+            self.assertEqual(toggl_api._topic("app", title), title)
+
+    def test_the_existing_strippers_still_run(self):
+        self.assertEqual(toggl_api._topic("zen", "(3) Adil (DM) - OneStep Power - Slack"),
+                         "Adil (DM) - OneStep Power - Slack")
+        self.assertEqual(toggl_api._topic("zen", "Plan - Google Docs"), "Plan")
+
+    def test_a_title_free_window_still_falls_back_to_the_app(self):
+        self.assertEqual(toggl_api._topic("com.mitchellh.ghostty", ""), "com.mitchellh.ghostty")

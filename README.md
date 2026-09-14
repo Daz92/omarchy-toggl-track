@@ -90,9 +90,15 @@ rather than 168.
 - Set the break that separates blocks (2/5/10/15 min) from the gear icon;
   changing it reloads the day
 
-Applying a block creates a completed historical entry tagged
-`created_with: omarchy-toggl-track/day`. It never stops or edits a running timer,
-and the server rejects any entry that would overlap an existing one.
+Applying a block creates a completed historical entry carrying the tag
+`omarchy-toggl-track`. That tag is how the Day tab tells an entry it wrote from
+one you wrote somewhere else: the first renders as applied, the second as a
+conflict it will never write over. It is a real Toggl tag and shows up in Toggl
+like any other. Entries written before this version have no tag, so they keep
+reading as conflicts; there is no way to recognise them after the fact.
+
+Applying never stops or edits a running timer, and the server rejects any entry
+that would overlap an existing one.
 
 Browser page detection, injected timer buttons, URL matching, and tab-close actions
 remain browser-extension features. This plugin provides the native timer workflow.

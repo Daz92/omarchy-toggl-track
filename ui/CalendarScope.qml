@@ -95,6 +95,7 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: Model.calendarHeaderLabel(root.calendarRange, root.calendarAnchorDate)
                 color: root.foreground
                 font.family: root.fontFamily
@@ -141,6 +142,7 @@ Item {
                         Text {
                             id: chipLabel
 
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             text: chip.modelData.label
                             color: chip.on ? panelTheme.text : panelTheme.textDisabled
@@ -169,6 +171,7 @@ Item {
                 spacing: 0
 
                 Text {
+                    textFormat: Text.PlainText
                     Layout.alignment: Qt.AlignRight
                     text: Model.clockDuration(calendarScope.rangeTotal)
                     color: panelTheme.accent
@@ -178,6 +181,7 @@ Item {
                 }
 
                 Text {
+                    textFormat: Text.PlainText
                     // month: `18 TRACKED DAYS · 4 WITH UNAPPLIED BLOCKS`
                     // week:  `axis 08:00–19:00 · automatic, from your tracked hours`
                     Layout.alignment: Qt.AlignRight
@@ -194,7 +198,7 @@ Item {
                     color: panelTheme.textDisabled
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
-                    font.letterSpacing: root.calendarRange === "month" ? 0.8 : 0
+                    font.letterSpacing: root.calendarRange === "month" ? 1 : 0
                 }
 
             }
@@ -202,8 +206,10 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             // Backward navigation disables at the 91-day floor and says why (spec 8.4).
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
             visible: !root.calendarCanPageBackward
             text: "‹  " + Model.calendarFloorHint(calendarScope.today)
             color: panelTheme.textDisabled
@@ -213,6 +219,7 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             visible: root.calendarClamped
             text: "Range shortened to " + root.calendarStartDate + " – Toggl answers 91 days back at most."
@@ -234,8 +241,9 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             visible: root.status === "loading" && (root.pendingAction === "range_entries" || root.pendingAction === "day_activity") && root.scope === "cal"
-            text: "Loading entries…"
+            text: "Reading entries…"
             color: panelTheme.textMuted
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -259,6 +267,7 @@ Item {
                 delegate: Text {
                     required property var modelData
 
+                    textFormat: Text.PlainText
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     Layout.minimumWidth: 0
@@ -307,9 +316,9 @@ Item {
 
                     // h/j/k/l must not walk the selection off screen.
                     onOnCursorChanged: {
-                        if (onCursor) {
+                        if (onCursor)
                             root.ensureVisible(this);
-                        }
+
                     }
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
@@ -336,6 +345,7 @@ Item {
                         spacing: 0
 
                         Text {
+                            textFormat: Text.PlainText
                             Layout.alignment: Qt.AlignHCenter
                             text: Model.clockDuration(cell.total)
                             color: panelTheme.accent
@@ -344,12 +354,13 @@ Item {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             Layout.alignment: Qt.AlignHCenter
                             text: Model.isoWeekLabel(cell.modelData.from || cell.modelData.date)
                             color: panelTheme.textDisabled
                             font.family: root.fontFamily
                             font.pixelSize: 9
-                            font.letterSpacing: 0.7
+                            font.letterSpacing: 0
                         }
 
                     }
@@ -365,6 +376,7 @@ Item {
                             Layout.fillWidth: true
 
                             Text {
+                                textFormat: Text.PlainText
                                 text: String(Number(String(cell.modelData.date).split("-")[2]))
                                 color: panelTheme.textDisabled
                                 font.family: root.fontFamily
@@ -376,6 +388,7 @@ Item {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 // ▲ conflict beats ◌ unapplied; nothing else is flagged (spec 8.4).
                                 visible: !!cell.modelData.inRange && !!(calendarScope.conflictDates[cell.modelData.date] || calendarScope.hasUnapplied(cell.modelData.date))
                                 text: calendarScope.conflictDates[cell.modelData.date] ? "▲" : "◌"
@@ -387,6 +400,7 @@ Item {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             text: cell.total > 0 ? Model.clockDuration(cell.total) : "—"
                             color: cell.total > 0 ? panelTheme.text : panelTheme.textDisabled
                             font.family: root.fontFamily
@@ -480,6 +494,7 @@ Item {
                         required property var modelData
                         readonly property bool isToday: modelData.date === calendarScope.today
 
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
                         Layout.minimumWidth: 0
@@ -489,7 +504,7 @@ Item {
                         color: isToday ? panelTheme.accent : panelTheme.textDisabled
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
-                        font.letterSpacing: 0.8
+                        font.letterSpacing: 1
                     }
 
                 }
@@ -511,6 +526,7 @@ Item {
                         delegate: Text {
                             required property var modelData
 
+                            textFormat: Text.PlainText
                             x: 0
                             y: (modelData - calendarScope.axis.start) * calendarScope.axis.rowHeight - 4
                             width: 22
@@ -541,9 +557,9 @@ Item {
 
                         // h/j/k/l must not walk the selection off screen.
                         onOnCursorChanged: {
-                            if (onCursor) {
+                            if (onCursor)
                                 root.ensureVisible(this);
-                            }
+
                         }
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
@@ -604,7 +620,7 @@ Item {
                                     visible: parent.height >= 11
                                     text: String(ev.modelData.description || "")
                                     textFormat: Text.PlainText
-                                    color: Color.background
+                                    color: panelTheme.onFill
                                     font.family: root.fontFamily
                                     font.pixelSize: 9
                                     elide: Text.ElideRight
@@ -711,6 +727,7 @@ Item {
                         required property var modelData
                         readonly property int total: calendarScope.dayTotals[modelData.date] || 0
 
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1
                         Layout.minimumWidth: 0
@@ -726,6 +743,7 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 // ▸ 3 entries fall outside 07:00 – 21:00  (ruling R-L, exact copy)
                 visible: calendarScope.overflowCount > 0
                 text: "▸ " + calendarScope.overflowCount + (calendarScope.overflowCount === 1 ? " entry falls" : " entries fall") + " outside " + calendarScope.pad2(calendarScope.axis.start) + ":00 – " + calendarScope.pad2(calendarScope.axis.end) + ":00"
@@ -746,14 +764,16 @@ Item {
             spacing: Style.spacing.rowGap
 
             Text {
+                textFormat: Text.PlainText
                 text: "AXIS"
                 color: panelTheme.textDisabled
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                font.letterSpacing: 1.2
+                font.letterSpacing: 1
             }
 
             Text {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
                 text: calendarScope.axis.derived ? "automatic, from your tracked hours" : ("fixed, " + calendarScope.pad2(calendarScope.axis.start) + ":00 – " + calendarScope.pad2(calendarScope.axis.end) + ":00")
@@ -764,11 +784,12 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: "STARTS"
                 color: panelTheme.textDisabled
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                font.letterSpacing: 1.2
+                font.letterSpacing: 1
             }
 
             NumberField {
@@ -784,12 +805,13 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 Layout.leftMargin: 4
                 text: "ENDS"
                 color: panelTheme.textDisabled
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                font.letterSpacing: 1.2
+                font.letterSpacing: 1
             }
 
             NumberField {
@@ -837,6 +859,7 @@ Item {
                     spacing: 4
 
                     Text {
+                        textFormat: Text.PlainText
                         text: modelData[0]
                         color: panelTheme.textMuted
                         font.family: root.fontFamily
@@ -844,6 +867,7 @@ Item {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         text: modelData[1]
                         color: panelTheme.textDisabled
                         font.family: root.fontFamily
@@ -859,6 +883,7 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: "◌"
                 color: calendarScope.warn
                 font.family: root.fontFamily
@@ -866,6 +891,7 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: "unapplied"
                 color: panelTheme.textDisabled
                 font.family: root.fontFamily
@@ -873,6 +899,7 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: "▲"
                 color: panelTheme.urgent
                 font.family: root.fontFamily
@@ -880,6 +907,7 @@ Item {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: "conflict"
                 color: panelTheme.textDisabled
                 font.family: root.fontFamily

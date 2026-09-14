@@ -58,13 +58,28 @@ function dayLabel(dateValue) {
   return DAY_NAMES[value.getDay()] + " " + value.getDate() + " " + MONTH_NAMES[value.getMonth()] + " " + value.getFullYear()
 }
 
-function prepareBlocks(blocks, entries) {
+// `previous` is the block list this one replaces, when there is one. A reload
+// must not throw away work in progress: a description typed but not yet
+// applied, a project picked, a row skipped. Those are carried across by start
+// time for any row the user had touched (editRevision > 0) and that is still
+// pending on the new side. Without it, every ^r, every day switch and back,
+// and every calendar week prefetch silently discarded the edit.
+function prepareBlocks(blocks, entries, previous) {
   var byId = {}
   ;(entries || []).forEach(function(entry) { if (entry && entry.id !== undefined) byId[String(entry.id)] = entry })
+  var touched = {}
+  ;(previous || []).forEach(function(block) {
+    if (block && block.start && (block.editRevision || 0) > 0 && block.state === "pending") touched[String(block.start)] = block
+  })
   return (blocks || []).map(function(block) {
     var conflict = block.conflict || null
+    // Ownership comes from the backend's conflict payload, which reads it off
+    // the OWNER_TAG. The entries lookup is the fallback for a cached payload
+    // written before that field existed; on a live response it is never used,
+    // because no Toggl read endpoint returns created_with at all.
     var owner = conflict && byId[String(conflict.id)]
-    var createdWith = String((owner && (owner.created_with || owner.createdWith)) || "")
+    var createdWith = String((conflict && conflict.created_with) || (owner && (owner.created_with || owner.createdWith)) || "")
+    var restored = (!conflict && touched[String(block.start)]) || null
     var seconds = number(block.seconds, 0)
     var span = number(block.span_seconds, seconds)
     return {
@@ -95,19 +110,30 @@ function prepareBlocks(blocks, entries) {
       // prior blended with embedding similarity. The model never votes here.
       projects: Array.isArray(block.projects) ? block.projects : [],
       // Which description candidate is showing; Tab walks the list.
-      candidateIndex: 0,
+      candidateIndex: restored ? (restored.candidateIndex || 0) : 0,
       modelDescription: "",
       // Ours renders as applied; anyone else's overlap is a conflict to resolve.
       state: !block.applied ? "pending" : (createdWith.indexOf("omarchy-toggl-track") === 0 ? "applied" : "conflict"),
       createdWith: createdWith,
-      description: String(block.label || ""),
-      projectId: 0,
-      taskId: 0,
+      // A covered block shows what Toggl actually holds, never the window
+      // title. Showing the label there is what made a written description look
+      // lost: the entry was intact in Toggl and the row read "FreeRDP:
+      // 127.0.0.1:47300" beside the word conflict.
+      description: conflict ? String(conflict.description || block.label || "")
+                            : String((restored && restored.description) || block.label || ""),
+      projectId: conflict ? (number(conflict.project_id, 0) || 0) : number(restored && restored.projectId, 0),
+      taskId: conflict ? (number(conflict.task_id, 0) || 0) : number(restored && restored.taskId, 0),
+      // The raw text of the edit drawer's @project/task field, so a reload
+      // does not empty a half-typed token.
+      tokenDraft: String((restored && restored.tokenDraft) || ""),
       // Set by the classifier (stage 6). A guessed row renders "~" and is not
       // ready until the user touches it (spec 7.5).
-      guessed: false,
+      guessed: restored ? !!restored.guessed : false,
       // Session-local dismissal (ruling R-N). Still counts toward the total.
-      skipped: false,
+      skipped: restored ? !!restored.skipped : false,
+      // Carried so applyHistoryGuesses and the enrichment pass both keep
+      // treating a restored row as touched, exactly as they did before reload.
+      editRevision: restored ? (restored.editRevision || 0) : 0,
       busy: false,
       failure: "",
       // Two independent drawers (spec 7.2). Either, both or neither may be open.
@@ -117,11 +143,108 @@ function prepareBlocks(blocks, entries) {
   })
 }
 
+// Ruling T-H. The APPS column printed the window manager's app id verbatim, so
+// one list mixed three naming systems: "com.mitchellh.ghostty",
+// "chrome-app.hey.com__-Default" and "zen". Display only -- the raw id is what
+// _browser_app() matches on and what the history store keys by, so the payload
+// keeps it. Apps only: on a domain like "calendar.google.com" the last-segment
+// rule would answer "Com".
+function appDisplayName(name) {
+  var text = String(name || "").trim()
+  if (!text) return ""
+  // Chromium's per-site app windows: chrome-<host>__<path>.
+  var chromeApp = /^chrome-(?:app\.)?([^_]+)(?:__.*)?$/i.exec(text)
+  if (chromeApp) return chromeApp[1]
+  if (text.indexOf(" ") === -1 && /^[a-z0-9]+(?:[.-][A-Za-z0-9_-]+)*\.[A-Za-z][A-Za-z0-9_-]*$/.test(text))
+    text = text.split(".").pop()
+  return /^[a-z0-9]+$/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text
+}
+
 // [{name, seconds}] from either that shape or a bare list of names.
 function namedSeconds(items) {
   return (items || []).map(function(item) {
     if (typeof item === "string") return { name: item, seconds: 0 }
     return { name: String((item && item.name) || ""), seconds: number(item && item.seconds, 0) }
+  })
+}
+
+// The edit drawer's "@project/task" field, resolved. Shared by the field's
+// live hint and by the commit path, so what the hint promises is exactly what
+// binds -- the field used to resolve only on Enter or focus-out and show
+// nothing meanwhile, which made a working field look dead.
+//
+// An empty fragment binds NOTHING. rankProjects("") ranks every project and
+// returns them all, so taking [0] on a bare "@" silently bound whichever
+// project sorted first -- verified live: typing "@" and tabbing away attached
+// a project the user had never named.
+function resolveToken(text, projects, tasks, tags) {
+  var raw = String(text || "")
+  var parsed = parseCommand(raw, projects, tasks, tags)
+  var projectId = parsed.projectId
+  var taskId = parsed.taskId
+  if (!projectId) {
+    var frag = raw.replace(/^\s*@/, "").split("/")[0].trim()
+    var top = frag ? rankProjects(projects, frag)[0] : null
+    if (top) projectId = Number(top.id) || 0
+  }
+  if (projectId && !taskId) {
+    var tfrag = raw.indexOf("/") !== -1 ? raw.split("/").pop().trim() : ""
+    if (tfrag) {
+      var ttop = rankTasks(tasks, projectId, tfrag)[0]
+      if (ttop) taskId = Number(ttop.id) || 0
+    }
+  }
+  return { projectId: projectId || 0, taskId: taskId || 0 }
+}
+
+// What the field should say under itself while the user types: the binding
+// that would land, or why none would. Never silent -- silence is what made
+// the field read as broken.
+function tokenHint(text, projects, tasks, tagList) {
+  var raw = String(text || "").trim()
+  if (!raw || raw === "@") return "type @ and part of a project name"
+  var resolved = resolveToken(raw, projects, tasks, tagList)
+  if (!resolved.projectId) return "no project matches \u201c" + raw.replace(/^@/, "") + "\u201d"
+  return projectMeta(projects, tasks, resolved.projectId, resolved.taskId)
+}
+
+// The rows the edit drawer lists under the @project/task field while it is
+// being typed into. Projects until the text carries a "/", tasks under the
+// named project after it. `token` is the canonical text the field keeps when
+// a row is picked, so what the user sees afterwards is the full name and not
+// the fragment they typed.
+//
+// A bare "@" lists every project on purpose. resolveToken still binds nothing
+// for it -- listing is an offer, binding is a choice, and conflating the two
+// is what silently attached an arbitrary project to a block.
+function tokenSuggestions(text, projects, tasks, maxItems) {
+  var raw = String(text || "")
+  if (raw.charAt(0) !== "@") return []
+  var limit = Math.max(1, Number(maxItems) || 6)
+  var body = raw.slice(1)
+  var slash = body.indexOf("/")
+  if (slash === -1) {
+    return rankProjects(projects, body.trim()).slice(0, limit).map(function(project) {
+      return {
+        label: String(project.name || ""),
+        detail: String(project.clientName || ""),
+        token: "@" + project.name,
+        projectId: Number(project.id) || 0,
+        taskId: 0
+      }
+    })
+  }
+  var top = rankProjects(projects, body.slice(0, slash).trim())[0]
+  if (!top) return []
+  var projectId = Number(top.id) || 0
+  return rankTasks(tasks, projectId, body.slice(slash + 1).trim()).slice(0, limit).map(function(task) {
+    return {
+      label: String(task.name || ""),
+      detail: String(top.name || ""),
+      token: "@" + top.name + "/" + task.name,
+      projectId: projectId,
+      taskId: Number(task.id) || 0
+    }
   })
 }
 
@@ -158,7 +281,7 @@ function blockAlso(block, maxItems) {
 }
 
 function blockSummary(blocks) {
-  var total = 0, ready = 0, applicable = 0, unassigned = 0, applied = 0, conflicts = 0, skipped = 0
+  var total = 0, ready = 0, guessed = 0, applicable = 0, unassigned = 0, applied = 0, conflicts = 0, skipped = 0
   ;(blocks || []).forEach(function(block) {
     // Every block counts toward the day, skipped ones included (R-N).
     total += number(block.seconds, 0)
@@ -167,24 +290,83 @@ function blockSummary(blocks) {
     if (state === "conflict") { conflicts += 1; return }
     if (state === "skipped") { skipped += 1; return }
     if (state === "unassigned") { unassigned += 1; return }
-    // "ready" and "guessed" both read as READY on the count line, which is
-    // what the guide renders; only genuinely ready rows are applicable.
+    // A guessed row is not applicable until confirmed (spec 7.5), so it must
+    // not be counted as READY either. Counting both together is what put
+    // "7 READY" on the header while the footer said "apply ready · 0" -- the
+    // two numbers described the same rows and disagreed.
+    if (state === "guessed") { guessed += 1; return }
     ready += 1
     if (blockReady(block)) applicable += 1
   })
-  return { totalSeconds: total, ready: ready, applicable: applicable, unassigned: unassigned, applied: applied, conflicts: conflicts, skipped: skipped }
+  return { totalSeconds: total, ready: ready, guessed: guessed, applicable: applicable, unassigned: unassigned, applied: applied, conflicts: conflicts, skipped: skipped }
 }
 
-// "2 APPLIED · 2 READY · 1 UNASSIGNED · 1 CONFLICT" -- the guide's count line.
+// "2 APPLIED · 2 READY · 3 GUESSED · 1 UNASSIGNED · 1 CONFLICT" -- the guide's
+// count line, plus GUESSED: the guide predates the classifier, and a guessed
+// row is the one state where the header and the apply affordance disagreed.
 // Zero categories are omitted; the guide only ever shows non-zero ones.
+// At most three segments. The header ran out of width at four and the Text
+// elided left, which on a "·"-separated list cuts a word in half: the line read
+// "…PLIED · 1 GUESSED · 1 UNASSIGNED · 2 CONFLICT". Ruling T-B says a closed
+// vocabulary drops whole segments instead.
+//
+// What goes is decided by how much the reader can do about it, not by position:
+// a conflict needs a decision, an unassigned row needs input, a guess needs
+// review, a ready row needs one key -- and APPLIED and SKIPPED describe work
+// that is already settled. Order on screen stays the guide's, whatever survives.
+var COUNT_LINE_MAX = 3
+// Rendered order, with how much each one is worth keeping (higher survives).
+var COUNT_SEGMENTS = [
+  { key: "applied", word: "APPLIED", keep: 1 },
+  { key: "ready", word: "READY", keep: 3 },
+  { key: "guessed", word: "GUESSED", keep: 4 },
+  { key: "unassigned", word: "UNASSIGNED", keep: 5 },
+  { key: "conflicts", word: "CONFLICT", keep: 6 },
+  { key: "skipped", word: "SKIPPED", keep: 2 }
+]
+
 function countLine(summary) {
-  var parts = []
-  if (summary.applied) parts.push(summary.applied + " APPLIED")
-  if (summary.ready) parts.push(summary.ready + " READY")
-  if (summary.unassigned) parts.push(summary.unassigned + " UNASSIGNED")
-  if (summary.conflicts) parts.push(summary.conflicts + " CONFLICT")
-  if (summary.skipped) parts.push(summary.skipped + " SKIPPED")
-  return parts.join(" \u00b7 ")
+  var present = []
+  COUNT_SEGMENTS.forEach(function(segment, index) {
+    var count = (summary && summary[segment.key]) || 0
+    if (count) present.push({ order: index, keep: segment.keep, text: count + " " + segment.word })
+  })
+  present.sort(function(a, b) { return b.keep - a.keep })
+  present = present.slice(0, COUNT_LINE_MAX)
+  present.sort(function(a, b) { return a.order - b.order })
+  return present.map(function(segment) { return segment.text }).join(" \u00b7 ")
+}
+
+// Whether blockMeta's answer comes from a closed vocabulary. Those strings are
+// short, the reader cannot complete them from a stub, and they must never be
+// the thing that elides -- "conflict · ma…" was on screen because the state
+// column and the description column both gave way at once (ruling T-B).
+function blockMetaIsFixed(block) {
+  return ["conflict", "unassigned", "inflight", "skipped"].indexOf(blockState(block)) >= 0
+}
+
+// What ↵ will do to the cursor row, for the hint bar. The bar used to promise
+// "apply" unconditionally, including on the rows where ↵ does nothing at all --
+// every covered row, and every row the classifier named.
+function enterHint(block) {
+  if (!block) return "apply"
+  var state = blockState(block)
+  if (state === "guessed") return "confirm"
+  if (state === "applied" || state === "conflict") return "written"
+  if (state === "inflight") return "writing\u2026"
+  if (blockReady(block)) return "apply"
+  if (state === "unassigned") return "needs a project"
+
+  return "apply"
+}
+
+// The hint bar is a fixed-width row with no elide: anything it says that does
+// not fit pushes the whole column wider than the panel and every block row is
+// clipped at the edge, mid-glyph. So this stays short. The count of rows
+// awaiting review is already in the header as GUESSED, and ↵'s own hint now
+// reads "confirm" on such a row, which is the part that was missing.
+function applyAllHint(summary) {
+  return "apply ready \u00b7 " + ((summary && summary.applicable) || 0)
 }
 
 // The trailing text of a row, per state (guide 05). Applied and conflict
@@ -192,7 +374,11 @@ function countLine(summary) {
 function blockMeta(block, projects, tasks) {
   var state = blockState(block)
   if (state === "unassigned") return "\u2014 unassigned \u2014"
-  if (state === "conflict") return "conflict \u00b7 manual"
+  // Ruling T-B, second attempt. Reserving this column's implicit width pushed
+  // the row's minimum past the panel and the rows overflowed their own right
+  // edge. Making the label short enough that it never needs the space is the
+  // better answer: "· manual" said nothing the ▲ and the urgent red do not.
+  if (state === "conflict") return "conflict"
   if (state === "inflight") return "writing\u2026"
   if (state === "skipped") return "skipped"
   return projectMeta(projects, tasks, block.projectId, block.taskId)
@@ -852,6 +1038,9 @@ function commandSegments(text) {
 // docs/2026-09-04-stage-2-6-rulings.md -- do not unify them.
 function clockDuration(seconds) {
   seconds = Math.max(0, Math.floor(number(seconds, 0)))
+  // Ruling T-I: absence is not a measurement. "0h00" read as a duration that
+  // happened to be small, on rows where there is no duration at all.
+  if (seconds === 0) return "\u2014"
   var hours = Math.floor(seconds / 3600)
   var minutes = Math.round((seconds % 3600) / 60)
   if (minutes === 60) { hours += 1; minutes = 0 }

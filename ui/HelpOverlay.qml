@@ -43,11 +43,12 @@ Rectangle {
             spacing: Style.spacing.rowGap
 
             Text {
+                textFormat: Text.PlainText
                 text: "KEYBOARD"
                 color: panelTheme.accent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                font.letterSpacing: 1.2
+                font.letterSpacing: 1
                 font.bold: true
             }
 
@@ -56,6 +57,7 @@ Rectangle {
             }
 
             Text {
+                textFormat: Text.PlainText
                 text: "esc to close"
                 color: panelTheme.textDisabled
                 font.family: root.fontFamily
@@ -106,11 +108,12 @@ Rectangle {
                     }
 
                     Text {
+                        textFormat: Text.PlainText
                         text: modelData.title
                         color: panelTheme.textDisabled
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
-                        font.letterSpacing: 1
+                        font.letterSpacing: 0
                     }
 
                     Repeater {
@@ -123,6 +126,7 @@ Rectangle {
                             spacing: Style.spacing.rowGap
 
                             Text {
+                                textFormat: Text.PlainText
                                 // Gutter sized to the widest key in this column,
                                 // so nothing is clipped and nothing is padded.
                                 Layout.preferredWidth: keyColumn.gutter
@@ -133,6 +137,7 @@ Rectangle {
                             }
 
                             Text {
+                                textFormat: Text.PlainText
                                 // Wrap, never elide: a keyboard reference that
                                 // hides half a key's meaning is not a reference.
                                 Layout.fillWidth: true
@@ -155,6 +160,7 @@ Rectangle {
         }
 
         Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             Layout.topMargin: 4
             text: "Letters act on the cursor row only while the command line is empty; with text typed they type."

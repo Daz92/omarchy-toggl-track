@@ -14,4 +14,8 @@ QtObject {
     readonly property color textDisabled: Util.alpha(Color.popups.text, 0.38)
     readonly property color accent: Color.accent
     readonly property color urgent: Color.urgent
+    // Text drawn ON a filled shape -- a project-coloured calendar block --
+    // rather than on the panel surface. A role, so no call site has to reach
+    // past this object for it (ruling T-J).
+    readonly property color onFill: Color.background
 }

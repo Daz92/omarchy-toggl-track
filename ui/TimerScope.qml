@@ -50,9 +50,9 @@ Item {
                     // Ten recent entries outgrow the panel, so ^j/^k has to
                     // bring its row with it.
                     onOnCursorChanged: {
-                        if (onCursor) {
+                        if (onCursor)
                             root.ensureVisible(rowItem);
-                        }
+
                     }
 
                     Rectangle {
@@ -67,6 +67,7 @@ Item {
                         spacing: Style.spacing.rowGap
 
                         Text {
+                            textFormat: Text.PlainText
                             Layout.preferredWidth: 11
                             text: rowItem.modelData.glyph
                             // --dim18 -> textDisabled (stage 2's colour table
@@ -80,15 +81,17 @@ Item {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             Layout.preferredWidth: 52
                             text: rowItem.modelData.verb
                             color: rowItem.index === root.resultCursorIndex ? panelTheme.accent : panelTheme.textDisabled
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
-                            font.letterSpacing: 0.6
+                            font.letterSpacing: 1
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
                             text: rowItem.modelData.label
@@ -99,6 +102,7 @@ Item {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             // The guide's row grid is "11px 52px 1fr auto".
                             // An `auto` track takes max-content as its max
                             // sizing function and `auto` as its min, and that
@@ -127,6 +131,7 @@ Item {
                         }
 
                         Text {
+                            textFormat: Text.PlainText
                             // Never elided, unlike label/meta above -- a
                             // CONT row's duration lives here (see
                             // Model.js's continueRow), and clipping it was
@@ -173,8 +178,9 @@ Item {
         // Sits below the rows and above the hint bar, as design-guide.html
         // §01 implies and master had it.
         Text {
+            textFormat: Text.PlainText
             visible: root.status === "loading"
-            text: root.manualRefresh ? "Refreshing metadata…" : (root.pendingAction ? "Updating Toggl…" : "Loading Toggl…")
+            text: "Reading projects and entries…"
             color: panelTheme.textMuted
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -182,6 +188,7 @@ Item {
         }
 
         Text {
+            textFormat: Text.PlainText
             visible: root.cacheInfo && root.cacheInfo.stale === true
             text: "Using cached project data — Refresh to retry."
             color: panelTheme.textDisabled
@@ -205,7 +212,7 @@ Item {
                 // Colour follows DayScope's dayError (Color.urgent), not
                 // master's Color.accent -- this branch already established
                 // urgent-red for surfaced errors and the two should agree.
-                color: Color.urgent
+                color: panelTheme.urgent
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
                 wrapMode: Text.WordWrap
@@ -213,10 +220,10 @@ Item {
             }
 
             Button {
-                text: "RETRY"
+                text: "Retry"
                 focusable: true
                 bordered: true
-                foreground: Color.accent
+                foreground: panelTheme.accent
                 onClicked: root.bootstrap()
             }
 
