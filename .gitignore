@@ -14,13 +14,16 @@ docs/images/full-*.png
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 
-# per-machine agent tooling: Claude Code settings, MCP servers, search ignores
+# Agent instructions and tooling: tracked on the private `master` branch only
+# (added there with `git add -f`), absent from `main`. The marketplace installs
+# a clone of main into the plugin directory, where a coding agent would read a
+# root AGENTS.md as its own instructions; the review blocked the listing on it.
+# Listed here so a checkout of main never offers them, and so a merge from
+# master cannot bring them back unnoticed.
+/AGENTS.md
+/CLAUDE.md
 .claude/
 .mcp.json
 .ignore
-
-# Agent instructions live on the private master branch only. The marketplace
-# installs the whole clone of main, and a coding agent opened in the plugin
-# directory would read a root AGENTS.md as its own instructions. Listed here
-# so a checkout of main can keep an untracked copy without git offering it.
-/AGENTS.md
+# Per-machine Claude Code permissions: never tracked, on any branch.
+.claude/settings.local.json
