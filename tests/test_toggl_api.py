@@ -780,9 +780,32 @@ class TogglApiTests(unittest.TestCase):
         self.assertEqual(toggl_api._topic("zen", "(3) NX8 board - Jira \u2014 Zen Browser"), "NX8 board - Jira")
         self.assertEqual(toggl_api._topic("zen", "Scope of Work - Google Docs \u2014 Zen Browser"), "Scope of Work")
         self.assertEqual(toggl_api._topic("zen", "Inbox - Google Chrome"), "Inbox")
+        self.assertEqual(toggl_api._topic("chromium", "Edit - M4V Dashboard - Jira - Google Chrome for Testing"),
+                         "Edit - M4V Dashboard - Jira")
+        # Slack's unread counter changes with every message and would split one
+        # conversation into a dozen topics.
+        self.assertEqual(toggl_api._topic("slack", "rnd-jira-updates (Channel) - OneStep Power - 4 new items - Slack"),
+                         "rnd-jira-updates (Channel) - OneStep Power - Slack")
+        self.assertEqual(toggl_api._topic("slack", "kelly (DM) - OneStep Power - 1 new item - Slack"),
+                         "kelly (DM) - OneStep Power - Slack")
         # A hyphenated title that merely looks like a suffix must survive.
         self.assertEqual(toggl_api._topic("zen", "nx8-server - Bitbucket"), "nx8-server - Bitbucket")
         self.assertEqual(toggl_api._topic("com.mitchellh.ghostty", ""), "com.mitchellh.ghostty")
+
+    def test_topic_folds_a_shell_title_to_directory_and_command(self):
+        # hustle-tracker's hook emits user@host:/cwd; a DEBUG trap appends the
+        # running command. User and host carry nothing; the repo and command do.
+        topic = toggl_api._topic
+        self.assertEqual(topic("com.mitchellh.ghostty", "daz@omarchy:/home/daz/Shared/Repos/m4v-twincat"), "m4v-twincat")
+        self.assertEqual(topic("com.mitchellh.ghostty", "daz@omarchy:/home/daz/Shared/Repos/m4v-twincat: nvim src/Main.st"),
+                         "m4v-twincat: nvim src/Main.st")
+        self.assertEqual(topic("com.mitchellh.ghostty", "daz@omarchy:~: claude --resume"), "home: claude --resume")
+        self.assertEqual(topic("com.mitchellh.ghostty", "daz@omarchy:~"), "home")
+        self.assertEqual(topic("com.mitchellh.ghostty", "daz@omarchy:~/Shared/Repos/oma-plugins/omarchy-toggl-track: pytest -q"),
+                         "omarchy-toggl-track: pytest -q")
+        # Not a shell title: an address in a mail subject, herdr's session title.
+        self.assertEqual(topic("zen", "user@example.com - Inbox"), "user@example.com - Inbox")
+        self.assertEqual(topic("com.mitchellh.ghostty", "omarchy: m4v-twincat"), "omarchy: m4v-twincat")
 
     def test_activity_excludes_screensaver_and_lock_surfaces(self):
         blocks = toggl_api.segment_blocks(
@@ -804,7 +827,8 @@ class TogglApiTests(unittest.TestCase):
                 aw_event("2026-08-19T10:03:20Z", 280, {"url": "https://private.test/secret", "incognito": True}),
             ],
         )
-        self.assertEqual(blocks[0]["domain"], "example.test")
+        # The first path segment names the section; query and fragment go.
+        self.assertEqual(blocks[0]["domain"], "example.test/path")
 
     def test_browser_app_covers_forks_without_matching_lookalikes(self):
         for app in ("zen", "app.zen_browser.zen", "Google Chrome", "firefox", "org.mozilla.librewolf", "vivaldi-stable"):
@@ -818,7 +842,28 @@ class TogglApiTests(unittest.TestCase):
             [aw_event("2026-08-19T10:00:00Z", 600, {"status": "not-afk"})],
             [aw_event("2026-08-19T10:00:00Z", 400, {"url": "https://bitbucket.org/team/repo/src"})],
         )
-        self.assertEqual(blocks[0]["domain"], "bitbucket.org")
+        self.assertEqual(blocks[0]["domain"], "bitbucket.org/team")
+
+    def test_site_keeps_a_section_but_not_an_id_or_a_bare_host(self):
+        self.assertEqual(toggl_api._site("https://docs.google.com/document/d/abc/edit"), "docs.google.com/document")
+        self.assertEqual(toggl_api._site("https://onesteppower.atlassian.net/jira/software"), "onesteppower.atlassian.net/jira")
+        self.assertEqual(toggl_api._site("http://192.168.1.251/"), "192.168.1.251")
+        self.assertEqual(toggl_api._site("https://example.test/123456"), "example.test")
+        self.assertEqual(toggl_api._site("https://example.test/9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c"), "example.test")
+        self.assertIsNone(toggl_api._site("not a url"))
+
+    def test_activity_domain_seconds_follow_browser_focus_not_the_block_span(self):
+        # A tab stays "current" while the editor has focus; only the browser's
+        # own 120 s count toward the site.
+        blocks = toggl_api.segment_blocks(
+            [
+                aw_event("2026-08-19T10:00:00Z", 120, {"app": "zen", "title": "Calendar"}),
+                aw_event("2026-08-19T10:02:00Z", 480, {"app": "dev.zed.Zed", "title": "Model.js"}),
+            ],
+            [aw_event("2026-08-19T10:00:00Z", 600, {"status": "not-afk"})],
+            [aw_event("2026-08-19T10:00:00Z", 600, {"url": "https://calendar.google.com/calendar/u/0"})],
+        )
+        self.assertEqual(blocks[0]["domains"], [{"name": "calendar.google.com/calendar", "seconds": 120}])
 
     def test_activity_domain_skipped_when_no_browser_in_block(self):
         blocks = toggl_api.segment_blocks(
@@ -1272,8 +1317,8 @@ class BlockDetailTest(unittest.TestCase):
 
     def test_domains_are_a_ranked_list_not_only_the_max(self):
         block = self._blocks()[0]
-        self.assertEqual(block["domains"], [{"name": "engineering.toggl.com", "seconds": 300}])
-        self.assertEqual(block["domain"], "engineering.toggl.com")
+        self.assertEqual(block["domains"], [{"name": "engineering.toggl.com/docs", "seconds": 300}])
+        self.assertEqual(block["domain"], "engineering.toggl.com/docs")
 
     def test_fragment_count_and_longest_run(self):
         block = self._blocks()[0]
@@ -1368,6 +1413,43 @@ class ActivityCacheTest(unittest.TestCase):
         if entries is not None:
             payload["entries"] = entries
         return api.day_activity(payload)
+
+    def test_every_web_bucket_is_read_and_merged(self):
+        # One bucket per browser extension: this machine listed three. Taking
+        # the first dropped every tab of the other browsers.
+        base = datetime(2026, 8, 19, 8, 0, tzinfo=timezone.utc)
+        buckets = dict(AW_BUCKETS, **{
+            "aw-watcher-web-brave_host": {"id": "aw-watcher-web-brave_host", "type": "web.tab.current"}})
+        served = []
+
+        def opener(request, timeout):
+            path = request.full_url.split("?")[0].replace(toggl_api.ACTIVITYWATCH_URL, "")
+            served.append(path)
+            if path == "/api/0/buckets/":
+                return Response(buckets)
+            if "window" in path:
+                return Response([aw_event(base.isoformat(), 600, {"app": "zen", "title": "tabs"})])
+            if "afk" in path:
+                return Response([aw_event(base.isoformat(), 600, {"status": "not-afk"})])
+            if "brave" in path:
+                return Response([aw_event((base + timedelta(minutes=5)).isoformat(), 300, {"url": "https://brave.test/docs"})])
+            return Response([aw_event(base.isoformat(), 300, {"url": "https://zen.test/team"})])
+
+        api = toggl_api.TogglAPI(cache_client(), cache_root=self.tmp.name, clock=TestClock(),
+                                 activitywatch_opener=opener)
+        block = self._call(api)["blocks"][0]
+        self.assertEqual(sorted(item["name"] for item in block["domains"]), ["brave.test/docs", "zen.test/team"])
+        self.assertEqual(sum(1 for path in served if "web" in path and path.endswith("/events")), 2)
+        # A bucket cache written before this change holds one string, not a list.
+        api._store().write("awbuckets", {
+            "schema": toggl_api.CACHE_SCHEMA, "version": toggl_api.CACHE_VERSION, "kind": "awbuckets",
+            "account_key": api.client.account_key, "expires_at": "2099-01-01T00:00:00Z",
+            "payload": {"currentwindow": "aw-watcher-window_host", "afkstatus": "aw-watcher-afk_host",
+                        "web.tab.current": "aw-watcher-web_host"}})
+        again = toggl_api.TogglAPI(cache_client(), cache_root=self.tmp.name, clock=TestClock(),
+                                   activitywatch_opener=opener)
+        day = again.day_activity({"workspace_id": 4, "date": self.DATE, "force_refresh": True})
+        self.assertEqual([item["name"] for item in day["blocks"][0]["domains"]], ["zen.test/team"])
 
     def test_bucket_ids_are_cached_across_calls(self):
         api, _ = self._api()
@@ -1729,7 +1811,7 @@ class ClassifyTest(unittest.TestCase):
         # Ruling R-AO: one block per request, and the model is asked for prose
         # only -- the project never reaches it, so the schema has no project_id.
         self.assertEqual(list(schema["properties"]), ["description"])
-        self.assertEqual(schema["properties"]["description"]["maxLength"], 120)
+        self.assertEqual(schema["properties"]["description"]["maxLength"], toggl_api.CLASSIFIER_MAX_DESCRIPTION)
         self.assertEqual(captured["body"]["chat_template_kwargs"], {"enable_thinking": False})
         self.assertEqual(captured["body"]["temperature"], 0)
     def test_classify_prompt_takes_names_from_dict_apps_and_domains(self):
@@ -1940,10 +2022,11 @@ class HistoryStoreTests(unittest.TestCase):
             self.assertEqual(records[0]["topics"], {"omarchy: toggl": 600, "flea": 300})
             self.assertEqual(records[0]["domains"], {"github.com": 900})
 
-    def test_classify_shows_the_model_neither_past_entries_nor_projects(self):
-        # Ruling R-AO: quoted past descriptions were copied verbatim (17 of 26
-        # outputs) and candidate project names were copied into the description
-        # on every block of a live day. The model sees the block and nothing else.
+    def test_classify_shows_past_descriptions_of_similar_blocks_never_projects(self):
+        # Ruling R-AR: the user's own wording for similar activity is quoted,
+        # one line each, because the correction log keeps it (F1 0.12 -> 0.29).
+        # Ruling R-AO still holds for projects: names were copied into the
+        # description on every block of a live day, so they are never shown.
         with tempfile.TemporaryDirectory() as root:
             toggl_api.HistoryStore(root).learn(self.BLOCK, {"id": 1, "description": "panel redesign", "project_id": 7})
             prompts = []
@@ -1957,11 +2040,50 @@ class HistoryStoreTests(unittest.TestCase):
                                    "blocks": [{"index": 0, "seconds": 100, "topics": [{"name": "omarchy: toggl", "seconds": 100}], "apps": [], "domains": []},
                                               {"index": 1, "seconds": 100, "topics": [{"name": "nothing similar", "seconds": 100}], "apps": [], "domains": []}]})
             self.assertEqual(len(prompts), 2)
+            self.assertIn("Past descriptions for similar blocks:\n- panel redesign", prompts[0])
+            self.assertNotIn("panel redesign", prompts[1])
             for prompt in prompts:
-                self.assertNotIn("panel redesign", prompt)
                 self.assertNotIn("Panel", prompt)
                 self.assertIn("Activity block:", prompt)
             self.assertEqual([r["index"] for r in result["results"]], [0, 1])
+
+    def test_classify_quotes_from_a_supplied_store_not_the_live_one(self):
+        # evaluate hands classify its leave-one-out store; quoting the live
+        # store would show the model the description it is scored against.
+        with tempfile.TemporaryDirectory() as live, tempfile.TemporaryDirectory() as held_out:
+            toggl_api.HistoryStore(live).learn(self.BLOCK, {"id": 1, "description": "the answer", "project_id": 7})
+            other = toggl_api.HistoryStore(held_out)
+            other.learn(self.BLOCK, {"id": 2, "description": "a neighbour", "project_id": 7})
+            prompts = []
+
+            def opener(request, timeout):
+                prompts.append(json.loads(request.data.decode("utf-8"))["messages"][-1]["content"])
+                return Response({"choices": [{"message": {"content": json.dumps({"description": "d"})}}]})
+
+            api = toggl_api.TogglAPI(FakeClient([]), classify_opener=opener, data_root=live)
+            api.classify({"workspace_id": 4, "projects": [], "blocks": [dict(self.BLOCK, index=0)]}, history=other)
+            self.assertIn("- a neighbour", prompts[0])
+            self.assertNotIn("the answer", prompts[0])
+
+    def test_classify_prompt_quotes_at_most_the_limit_one_per_line(self):
+        prompt = toggl_api._classify_block_prompt(
+            {"seconds": 60, "topics": [], "apps": [], "domains": []},
+            ["one", " ", "two", "three", "four"])
+        self.assertTrue(prompt.endswith("Past descriptions for similar blocks:\n- one\n- two\n- three"))
+        self.assertNotIn("four", prompt)
+        self.assertNotIn("Past descriptions", toggl_api._classify_block_prompt(
+            {"seconds": 60, "topics": [], "apps": [], "domains": []}, []))
+
+    def test_tidy_description_drops_the_fragment_the_grammar_cut(self):
+        cap = toggl_api.CLASSIFIER_MAX_DESCRIPTION
+        whole = "m4v-twincat development, hardware procurement, BOM updates, schematics review"
+        clipped = (whole + ", procurement of the remaining hardware for the cabinet")[:cap]
+        self.assertGreater(len(clipped), len(whole))
+        self.assertEqual(toggl_api._tidy_description(clipped), clipped.rsplit(" ", 1)[0].rstrip(" ,"))
+        self.assertTrue(toggl_api._tidy_description(clipped).startswith(whole))
+        # Short answers are left whole, apart from whitespace.
+        self.assertEqual(toggl_api._tidy_description("  jira board   management "), "jira board management")
+        self.assertEqual(toggl_api._tidy_description("x" * cap), "x" * cap)
     def test_learn_history_replays_days_and_skips_failures(self):
         with tempfile.TemporaryDirectory() as root:
             from datetime import timedelta

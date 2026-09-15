@@ -235,9 +235,36 @@ The work is split, because measuring said so:
   On a real 26-block evaluation the language models managed 4–65% here; simply
   counting your most-used project managed 81%.
 - **The description is written by a small language model** (granite-4.0-1b,
-  901 MB), one call per block, shown the block and nothing else. Batching a
-  day into one call scored near zero, and anything else placed in the prompt
-  came back copied verbatim.
+  901 MB), one call per block, shown the block and up to three of your own
+  descriptions for similar past blocks — nothing else. Batching a day into one
+  call scored near zero; project names in the prompt came back copied.
+  Quoting your past wording is the one copy that is wanted: on 57 labelled
+  blocks it took the model's agreement with what you then wrote from 0.12 to
+  0.29 (token F1).
+
+The classifier only sees what ActivityWatch records, so what a window calls
+itself is the whole input. Two things are worth setting up outside the plugin:
+
+- **Terminal titles.** A terminal showing only its directory (or, under tmux,
+  `host:window`) was 60% of a measured month's focus time with one word of
+  signal. Have the shell write `user@host:/cwd` at the prompt and
+  `user@host:/cwd: <command>` while one runs (a `PROMPT_COMMAND` hook plus a
+  `DEBUG` trap in bash); under tmux add `set -g set-titles-string
+  '#{pane_title}'` so that reaches the window. The plugin folds that shape to
+  `repo: command` — `m4v-twincat: nvim src/Main.st` — for the model and the
+  history store.
+- **Opaque windows.** A remote desktop is `FreeRDP: 127.0.0.1:47300` all day.
+  Name it where the activity is recorded, so every consumer sees the same
+  label: an [awatcher](https://github.com/2e3s/awatcher) filter in
+  `~/.config/awatcher/config.toml` —
+
+  ```toml
+  [[awatcher.filters]]
+  match-app-id = "xfreerdp"
+  replace-title = "TwinCAT engineering VM (FreeRDP)"
+  ```
+
+  The plugin keeps no alias list of its own.
 
 Where a GPU with a Vulkan driver exists, the chat model runs on it; otherwise
 everything runs on the CPU. Force one with `TOGGL_CLASSIFIER_PROFILE=gpu` or

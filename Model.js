@@ -1863,8 +1863,13 @@ function descriptionCandidates(block) {
     for (var i = 0; i < out.length; i++) if (out[i].text.toLowerCase() === text.toLowerCase()) return
     out.push({ text: text, source: source })
   }
+  // A past description the store is confident about goes first: the
+  // correction log kept those 33% of the time against 10% for model prose
+  // (ruling R-AR). Weaker history still follows the model.
+  var history = block.history || []
+  history.forEach(function(hit) { if (number(hit && hit.score, 0) >= HISTORY_GUESS_SCORE) push(hit.description, "history") })
   push(block.modelDescription, "model")
-  ;(block.history || []).forEach(function(hit) { push(hit.description, "history") })
+  history.forEach(function(hit) { push(hit.description, "history") })
   push(block.label, "title")
   return out
 }

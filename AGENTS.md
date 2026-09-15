@@ -330,10 +330,13 @@ whole 20 s classify budget before any JSON (rulings R-AG). Keep `max_tokens`,
 `temperature: 0` and the `minItems`/`maxItems` pin on `results` too — the
 grammar, not the model, guarantees one result per block.
 
-**Never show the classifier anything you are not willing to see copied.** Past
-descriptions came back verbatim in 17 of 26 outputs; candidate project names
-came back as the description on every block of a live day (ruling R-AO). The
-prompt carries the block and nothing else, and the schema has one field.
+**Never show the classifier anything you are not willing to see copied.**
+Candidate project names came back as the description on every block of a live
+day (ruling R-AO), so they stay out. The user's own past descriptions for
+similar blocks are the one thing shown on purpose (ruling R-AR): the correction
+log says a copy of those is what the user keeps, and they lifted description
+F1 from 0.12 to 0.29 on 57 labelled blocks. One per line -- a `" | "`
+separator came back inside answers. The schema still has one field.
 
 **Never let the model choose the project.** Counting beats it: the usage prior
 scores 81% where the best of eight models scores 65%. `HistoryStore.project_scores`

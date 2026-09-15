@@ -10,3 +10,11 @@ dist/
 # capture intermediates
 docs/images/baseline.png
 docs/images/full-*.png
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# per-machine agent tooling: Claude Code settings, MCP servers, search ignores
+.claude/
+.mcp.json
+.ignore

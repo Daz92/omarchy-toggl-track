@@ -1497,10 +1497,20 @@ test("helpSections documents every scope switch and the help key itself", () => 
 test("descriptionCandidates lists model, history and title once each, best first", () => {
   const block = { label: "omarchy: toggl", modelDescription: "panel redesign work",
     history: [{ description: "past entry", score: 0.8 }, { description: "past entry", score: 0.4 }] }
+  // Ruling R-AR: a confident past description (score >= HISTORY_GUESS_SCORE)
+  // is offered before the model's prose; the user kept those 33% of the time
+  // against 10%.
   assert.deepEqual(Model.descriptionCandidates(block), [
-    { text: "panel redesign work", source: "model" },
     { text: "past entry", source: "history" },
+    { text: "panel redesign work", source: "model" },
     { text: "omarchy: toggl", source: "title" },
+  ])
+  // Weak history still trails the model.
+  assert.deepEqual(Model.descriptionCandidates({ label: "t", modelDescription: "m",
+    history: [{ description: "weak", score: 0.3 }] }), [
+    { text: "m", source: "model" },
+    { text: "weak", source: "history" },
+    { text: "t", source: "title" },
   ])
   // A block with nothing but its title still offers that title.
   assert.deepEqual(Model.descriptionCandidates({ label: "only a title" }), [{ text: "only a title", source: "title" }])
@@ -1510,10 +1520,12 @@ test("descriptionCandidates lists model, history and title once each, best first
 test("cycleDescription walks the candidates in both directions and wraps", () => {
   const block = { label: "title", description: "title", modelDescription: "model text",
     history: [{ description: "history text", score: 0.9 }], candidateIndex: 0 }
+  // Order is history (0.9 >= HISTORY_GUESS_SCORE), model, title.
+  assert.equal(Model.cycleDescription(block, 1).source, "model")
+  assert.equal(block.description, "model text")
+  assert.equal(Model.cycleDescription(block, 1).source, "title")
   assert.equal(Model.cycleDescription(block, 1).source, "history")
   assert.equal(block.description, "history text")
-  assert.equal(Model.cycleDescription(block, 1).source, "title")
-  assert.equal(Model.cycleDescription(block, 1).source, "model")
   assert.equal(Model.cycleDescription(block, -1).source, "title")
   assert.equal(block.guessed, true)
   assert.equal(Model.cycleDescription({ label: "" }, 1), null)

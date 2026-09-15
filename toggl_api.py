@@ -52,22 +52,28 @@ CLASSIFIER_TIMEOUT = 20
 # The unit serves whichever model the profile installed under one alias, so
 # the client never has to know which (ruling R-AM).
 CLASSIFIER_MODEL = "toggl-classifier"
-CLASSIFIER_MAX_DESCRIPTION = 120
+# 90: the user's own descriptions run 5-9 words; at 120 the 1B model wrote
+# 15-word sentences and the grammar cut 14 of 30 mid-word (ruling R-AR).
+CLASSIFIER_MAX_DESCRIPTION = 90
 # Roughly 40 tokens per block; 12 blocks fit. At 72 tok/s on the GPU profile
 # even the cap stays well inside the 20 s budget (ruling R-AM).
 CLASSIFIER_MAX_TOKENS = 800
 CLASSIFIER_SYSTEM_PROMPT = (
-    # Ruling R-AO. The model's only job is prose. Shown a shortlist of projects
-    # it copied the winning project's name into the description on every block
-    # of a live day; shown the user's past descriptions it copied those instead.
-    # So it is shown neither: the project is decided by prior and centroid, and
-    # this prompt asks for one sentence about the work and nothing else.
-    "You are a personal assistant who writes Toggl time-entry descriptions for "
-    "an engineer. You see one block of their computer activity: window titles, "
-    "apps and websites with minutes spent, and the time of day. Write one "
-    "specific description of 4 to 10 words naming the concrete work -- the "
-    "repository, document, system or task, and what was being done to it. Do "
-    "not copy a window title verbatim, do not list apps, never mention Toggl."
+    # Rulings R-AO and R-AR. The model's only job is prose; the project is
+    # decided by prior and centroid and never shown. The user's past
+    # descriptions for similar blocks ARE shown: on 57 labelled blocks that
+    # lifted token F1 against what the user then wrote from 0.12 to 0.29, and
+    # the correction log shows they keep those phrasings, so a copy is the
+    # desired outcome here, not the leak R-AO measured for project names.
+    # Positive job description only, no worked example: the example phrase
+    # leaked into 12 of 57 outputs (R-AJ holds).
+    "You write Toggl time-entry descriptions for an engineer. You see one block "
+    "of their computer activity: window titles, apps and websites with minutes "
+    "spent, the time of day, and descriptions the engineer wrote for similar "
+    "past blocks. Answer in their style: 3 to 8 words, a comma-separated list "
+    "of the block's work streams as noun phrases, biggest first, naming the "
+    "repository, system, document or task. Reuse their past wording when the "
+    "work is the same."
 )
 SECRET_COMMAND = ["secret-tool", "lookup", "service", "daz.toggl-track", "account", "api-token"]
 MAX_RETRIES = 2
@@ -513,6 +519,29 @@ def _hostname(value):
         return None
 
 
+# A first path segment that reads as a section, not an id or a hash.
+_SITE_SEGMENT = re.compile(r"^(?=.*[a-z])[a-z0-9_-]{2,24}$", re.IGNORECASE)
+
+
+def _site(value):
+    """`host/section`: the first path segment separates docs.google.com/document
+    from /spreadsheets, bitbucket.org/<team> from another team, jira from its
+    issue browser. Measured on 22 days the bare host was the same six names
+    for most of the day, so it told the classifier little."""
+    host = _hostname(value)
+    if not host:
+        return None
+    try:
+        segment = urlsplit(value).path.strip("/").split("/", 1)[0]
+    except ValueError:
+        return host
+    return "%s/%s" % (host, segment.lower()) if _SITE_SEGMENT.match(segment) else host
+
+
+def _site_host(name):
+    return _history_key(str(name or "").split("/", 1)[0])
+
+
 # Distinctive enough to match anywhere in the app id.
 _BROWSER_SUBSTRINGS = (
     "chrome", "chromium", "firefox", "brave", "edge", "opera", "browser",
@@ -533,12 +562,15 @@ def _browser_app(value):
 # Browser and document suffixes add nothing to a topic name.
 _TITLE_SUFFIX = re.compile(
     r"\s*[\u2014\u2013-]\s*("
-    r"zen browser|google chrome|chromium|mozilla firefox|firefox|brave|"
+    r"zen browser|google chrome for testing|google chrome|chromium|mozilla firefox|firefox|brave|"
     r"microsoft edge|opera|vivaldi|librewolf|floorp"
     r")\s*$",
     re.IGNORECASE,
 )
 _TITLE_COUNTER = re.compile(r"^\(\d+\)\s*")
+# Slack: "channel - Workspace - 4 new items - Slack". The counter changes with
+# every message, which split one conversation into a dozen topics.
+_TITLE_UNREAD = re.compile(r"\s*-\s*\d+ new items?(?=\s*-|\s*$)", re.IGNORECASE)
 _TITLE_DOCUMENT = re.compile(r"\s*-\s*Google (?:Docs|Sheets|Slides)\s*$", re.IGNORECASE)
 # A window title that is nothing but a URL. Ruling T-H: the query and the
 # fragment carry no meaning a person reads -- a whole block was labelled
@@ -548,6 +580,24 @@ _TITLE_URL = re.compile(
     r"^(?:https?://)?((?:[\w-]+\.)+[\w-]+(?:/[^\s?#]*)?)(?:[?#]\S*)?$",
     re.IGNORECASE,
 )
+
+# A terminal title of the form "user@host:/path" or "user@host:/path: command"
+# (the shape hustle-tracker's shell hook emits, with the running command
+# appended by a DEBUG trap). Only the directory's last segment and the command
+# say anything about the work; the user and host are the same all day.
+_TITLE_SHELL = re.compile(r"^[\w.-]+@[\w.-]+:(~?/?[^\s:]*?)(?::\s*(.+))?$")
+
+
+def _shell_topic(text):
+    match = _TITLE_SHELL.match(text)
+    if not match:
+        return None
+    path, command = match.group(1), (match.group(2) or "").strip()
+    directory = path.rstrip("/").rsplit("/", 1)[-1] or path or "~"
+    if directory in ("~", ""):
+        directory = "home"
+    return "%s: %s" % (directory, command) if command else directory
+
 
 # Shell surfaces that are on screen but are not work.
 _IGNORED_APPS = ("omarchy-screensaver", "org.omarchy.screensaver", "org.omarchy.lock")
@@ -560,11 +610,15 @@ def _ignored_app(value):
 def _topic(app, title):
     """Human-recognisable name for whatever a window was showing."""
     text = _TITLE_COUNTER.sub("", str(title or "").strip())
+    text = _TITLE_UNREAD.sub("", text)
     text = _TITLE_SUFFIX.sub("", text)
     text = _TITLE_DOCUMENT.sub("", text).strip()
     bare_url = _TITLE_URL.match(text)
     if bare_url:
         text = bare_url.group(1).rstrip("/")
+    shell = _shell_topic(text)
+    if shell:
+        text = shell
     return (text or str(app or ""))[:MAX_TEXT]
 
 
@@ -694,14 +748,24 @@ def segment_blocks(window_events, afk_events, web_events=None, config=None):
             for name in sorted(app_weights, key=lambda name: (-app_weights[name], name))
         ]
         domain_weights = {}
-        if any(_browser_app(item["name"]) for item in apps):
+        # A tab stays "current" while the browser sits unfocused behind an
+        # editor, so a site is credited only for the seconds a browser window
+        # actually had focus -- measured, the block-span overlap put a 64-minute
+        # calendar tab into a block that showed the browser for 15.
+        browser_intervals = _merge_intervals(
+            (fragment["start"], fragment["end"]) for fragment in fragments if _browser_app(fragment["app"])
+        )
+        if browser_intervals:
             for web in web_spans:
                 if web is None or web["data"].get("incognito") is True:
                     continue
-                overlap = (min(group["end"], web["end"]) - max(group["start"], web["start"])).total_seconds()
+                overlap = sum(
+                    max(0.0, (min(end, web["end"]) - max(start, web["start"])).total_seconds())
+                    for start, end in browser_intervals
+                )
                 if overlap <= 0:
                     continue
-                domain = _hostname(web["data"].get("url"))
+                domain = _site(web["data"].get("url"))
                 if domain:
                     domain_weights[domain] = domain_weights.get(domain, 0.0) + overlap
         domains = [
@@ -1097,17 +1161,38 @@ def _classify_index(value, name):
     return value
 
 
-def _classify_block_prompt(block):
-    """One block, no projects, no past descriptions -- everything the model was
-    ever shown as context, it copied (ruling R-AO)."""
+def _classify_block_prompt(block, past=None):
+    """One block plus the user's own descriptions of similar past blocks. No
+    projects: shown a shortlist the model copied the winner (ruling R-AO). The
+    past descriptions are shown on purpose (ruling R-AR), one per line -- a
+    " | " separator came back inside the answers."""
     when = str(block.get("start") or "")[11:16]
-    return "\n".join([
+    lines = [
         "Activity block:",
         "%s%s" % (when + ", " if when else "", _classify_minutes(block["seconds"])),
         "Window titles: %s" % _classify_list(block["topics"], 12),
         "Apps: %s" % _classify_list(block["apps"], 6),
         "Sites: %s" % _classify_list(block["domains"], 6),
-    ])
+    ]
+    past = [str(text).strip() for text in (past or []) if str(text or "").strip()]
+    if past:
+        lines.append("Past descriptions for similar blocks:")
+        lines.extend("- " + text for text in past[:HISTORY_PROMPT_LIMIT])
+    return "\n".join(lines)
+
+
+_DESCRIPTION_TAIL = re.compile(r"[\s,;:/|&-]+$")
+
+
+def _tidy_description(text, limit=None):
+    """The grammar stops at maxLength mid-word: "hardware proc,". When the
+    answer ran into the cap, drop the trailing fragment and any dangling
+    separator so what the user sees is a whole phrase."""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    limit = CLASSIFIER_MAX_DESCRIPTION if limit is None else limit
+    if len(text) >= limit - 1 and " " in text:
+        text = text.rsplit(" ", 1)[0]
+    return _DESCRIPTION_TAIL.sub("", text)
 
 
 def _classify_block_schema():
@@ -1271,8 +1356,8 @@ HISTORY_CORRECTION_CAP = 2000
 HISTORY_RECORD_CAP = 2000
 HISTORY_ENTRY_CAP = 5000
 HISTORY_GUESS_SCORE = 0.5     # Model.historyGuessFor takes a guess at this score
-HISTORY_PROMPT_SCORE = 0.2    # classify quotes records at this score...
-HISTORY_PROMPT_LIMIT = 2      # ...at most this many per block
+HISTORY_PROMPT_SCORE = 0.2    # classify quotes records at this score (ruling R-AR)...
+HISTORY_PROMPT_LIMIT = 3      # ...at most this many per block
 
 
 def _embed(texts, opener=None, timeout=EMBEDDER_TIMEOUT):
@@ -1438,7 +1523,8 @@ class HistoryStore:
             bags = []
             for record in data["records"]:
                 records[record["key"]] = record
-                bags.append((record, set(record.get("apps") or {}), set(record.get("domains") or {})))
+                bags.append((record, set(record.get("apps") or {}),
+                             set(_site_host(name) for name in (record.get("domains") or {}))))
                 pid = record.get("project_id")
                 if pid is not None:
                     counts[int(pid)] += max(1, int(record.get("seen") or 1))
@@ -1664,9 +1750,9 @@ class HistoryStore:
         topics = _named_seconds(block.get("topics"))
         total = sum(topics.values()) or 1
         apps = set(_named_seconds(block.get("apps")))
-        domains = set(_named_seconds(block.get("domains")))
+        domains = set(_site_host(name) for name in _named_seconds(block.get("domains")))
         if block.get("domain"):
-            domains.add(_history_key(block["domain"]))
+            domains.add(_site_host(block["domain"]))
         scored = []
         for record, rec_apps, rec_domains in self.indexes()["bags"]:
             rec_topics = record.get("topics") or {}
@@ -2214,8 +2300,13 @@ class TogglAPI:
                     continue
                 bucket_type = bucket.get("type")
                 bucket_id = bucket.get("id", bucket.get("name"))
-                if bucket_type in ("currentwindow", "afkstatus", "web.tab.current") \
-                        and bucket_id and bucket_type not in bucket_ids:
+                if not bucket_id:
+                    continue
+                if bucket_type == "web.tab.current":
+                    # One bucket per browser extension. This machine had three;
+                    # taking the first would have dropped every Brave tab.
+                    bucket_ids.setdefault(bucket_type, []).append(str(bucket_id))
+                elif bucket_type in ("currentwindow", "afkstatus") and bucket_type not in bucket_ids:
                     bucket_ids[bucket_type] = str(bucket_id)
             if store:
                 store.write("awbuckets", {
@@ -2228,14 +2319,20 @@ class TogglAPI:
         params = {"start": _iso_datetime(start), "end": _iso_datetime(end), "limit": -1}
         events = {}
         for bucket_type in ("currentwindow", "afkstatus", "web.tab.current"):
-            bucket_id = bucket_ids.get(bucket_type)
-            events[bucket_type] = None if bucket_id is None else _activitywatch_events(
-                _activitywatch_request(
-                    "/api/0/buckets/%s/events" % quote(bucket_id, safe=""),
-                    params,
-                    self._activitywatch_opener,
+            ids = bucket_ids.get(bucket_type)
+            # A cache written before web buckets became a list holds one string.
+            ids = [ids] if isinstance(ids, str) else list(ids or [])
+            events[bucket_type] = None if not ids else [
+                event
+                for bucket_id in ids
+                for event in _activitywatch_events(
+                    _activitywatch_request(
+                        "/api/0/buckets/%s/events" % quote(bucket_id, safe=""),
+                        params,
+                        self._activitywatch_opener,
+                    )
                 )
-            )
+            ]
         if store:
             store.write("awday", {
                 "schema": CACHE_SCHEMA, "version": CACHE_VERSION, "kind": "awday",
@@ -2473,7 +2570,8 @@ class TogglAPI:
                     out = self.classify({"workspace_id": workspace_id,
                                          "blocks": [dict(sample["block"], index=0)],
                                          "projects": [{"id": p["id"], "name": p["name"],
-                                                       "client": p.get("client_name") or ""} for p in shortlist]})
+                                                       "client": p.get("client_name") or ""} for p in shortlist]},
+                                        history=store)
                     row = (out.get("results") or [{}])[0]
                     if row.get("project_id") is not None:
                         methods["model"]["answered"] += 1
@@ -2699,7 +2797,7 @@ class TogglAPI:
         body = {"workspace_id": workspace_id, "description": description, "project_id": project_id, "task_id": task_id, "tags": tags, "billable": billable, "start": _now(), "duration": -1, "created_with": "omarchy-shell"}
         return {"entry": _normalized_entry(self.client.request("POST", "/workspaces/%d/time_entries" % workspace_id, body=body, mutation=True))}
 
-    def classify(self, payload, deadline=None, vectors=None):
+    def classify(self, payload, deadline=None, vectors=None, history=None):
         started = time.monotonic()
         deadline = deadline if deadline is not None else started + CLASSIFIER_TIMEOUT
         workspace_id = _id(_field(payload, "workspace_id", "workspaceId", "wid"), "workspace_id")
@@ -2743,7 +2841,9 @@ class TogglAPI:
                 "seconds": int(_minutes(block.get("seconds"), "block.seconds", 0)),
             })
 
-        history = self._history()
+        # evaluate passes its leave-one-out store: quoting from the live store
+        # would hand the model the very description it is being scored against.
+        history = self._history() if history is None else history
         # Geometry and counting decide the project (ruling R-AO); the model only
         # ever sees a shortlist, and its vote is advisory.
         if vectors is None:
@@ -2764,7 +2864,14 @@ class TogglAPI:
         prompt = ""
         for block in blocks:
             ranked = suggestions.get(block["index"]) or []
-            prompt = _classify_block_prompt(block)
+            past = []
+            if history is not None:
+                try:
+                    past = [hit["description"] for hit in history.suggest(block, HISTORY_PROMPT_LIMIT)
+                            if hit.get("description") and float(hit.get("score") or 0) >= HISTORY_PROMPT_SCORE]
+                except Exception:
+                    past = []
+            prompt = _classify_block_prompt(block, past)
             body = {
                 "model": CLASSIFIER_MODEL,
                 "messages": [
@@ -2803,7 +2910,7 @@ class TogglAPI:
                     content = None
                 if not valid(content):
                     degraded = True
-            description = content["description"] if valid(content) else ""
+            description = _tidy_description(content["description"]) if valid(content) else ""
             # The project is the store's, never the model's (ruling R-AO).
             project_id = ranked[0]["project_id"] if ranked else None
             confidence = float(ranked[0]["score"]) if ranked else 0.0

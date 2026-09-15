@@ -860,3 +860,84 @@ in used to greet the next open.
 
 **Cost if wrong:** a key that shadows typing. The empty-command-line rule is
 what prevents that.
+
+## 18. Amendments, 2026-09-14 — the description layer, measured (R-AR)
+
+### R-AR · The model is shown the user's own past descriptions, and the input is cleaned
+
+Ten days of live corrections (45 applies) and a 30-day `evaluate` run (75
+labelled blocks, 57 with descriptions) said the description layer was the
+weakest thing on screen:
+
+| description source | kept verbatim (live) | token F1 vs what the user wrote |
+|---|---|---|
+| model prose, prompt as of R-AO | 3 of 30 | **0.121** |
+| the block's window title | — | 0.235 |
+| the user's closest past description | 5 of 15 | 0.265 |
+
+The project layer was fine — 45 of 45 kept — but not for the reason hoped: the
+usage prior is 87% one project, and `prior+centroid` scored exactly what
+`prior` did (69.3%), so the centroid currently decides nothing.
+
+Why the prose was bad: length, and starved input. The prompt asked for 4–10
+words; 18 of 30 answers exceeded 10 and 14 of 30 ran into the 120-character
+grammar cap mid-word (`"...collaborating with team-management and"`). The
+user's own descriptions run 5–9 words as a comma-separated list of work
+streams. And 60% of all focus time is a terminal whose title is only the
+repository (`omarchy: m4v-twincat`, 238 h), plus 44 h of `FreeRDP:
+127.0.0.1:47300`, which the model turned into "Running FreeRDP server on
+localhost".
+
+Offline A/B on the 57 blocks, one llama-server call per block, temperature 0:
+
+| prompt | F1 | embedding cosine | median words | clipped |
+|---|---|---|---|---|
+| R-AO prompt, cap 120 | 0.121 | 0.610 | 15 | 30/57 |
+| comma-list style, cap 60 | 0.245 | 0.692 | 6 | 49/57 |
+| + cleaned terminal/RDP titles | 0.210 | 0.683 | 7 | 54/57 |
+| + 3 past descriptions in the prompt, cap 90 | 0.291 | 0.724 | 9 | 11/57 |
+| **positive-only wording, + past descriptions, cap 90** | **0.295** | 0.719 | 11 | 37/57 |
+
+Decisions, each acted on:
+
+- **Past descriptions go back into the prompt.** R-AO removed them because the
+  model copied them. The correction log now shows a copy is what the user
+  keeps — the past-description candidate survived 33% against the model's
+  10% — so `classify` quotes up to `HISTORY_PROMPT_LIMIT` (3) of
+  `HistoryStore.suggest` hits scoring at least `HISTORY_PROMPT_SCORE` (0.2),
+  one per line. A `" | "` separator came back inside the answers; lines do
+  not. Project names stay out (R-AO holds for them: still copied, and the
+  project is decided elsewhere).
+- **Positive prompt, no worked example.** The example phrase
+  `"jira board management"` leaked into 12 of 57 outputs, so R-AJ holds; the
+  positive-only wording scored the same without it. Negative style rules
+  measured neutral-to-worse and stay out (R-AN).
+- **Cap 90, and tidy the cut.** `CLASSIFIER_MAX_DESCRIPTION` 120 → 90;
+  `_tidy_description` drops the trailing fragment and dangling separator when
+  an answer runs into the cap.
+- **Confident history first.** `Model.descriptionCandidates` offers a past
+  description scoring at least `HISTORY_GUESS_SCORE` before the model's
+  prose; weaker history still trails it.
+- **Sites carry their section.** `_site` keeps the first path segment when it
+  reads as a name (`docs.google.com/document`, `bitbucket.org/<team>`,
+  `onesteppower.atlassian.net/jira`); ids and hashes fall back to the host.
+  History matching compares hosts, so records that predate this still count.
+- **Site seconds follow browser focus.** A tab stays "current" while the
+  editor has focus; measured, that put a 64-minute calendar tab into a block
+  that showed the browser for 15. Sites are credited only for seconds a
+  browser window had focus.
+- **Every `web.tab.current` bucket is read.** This machine listed three (one
+  per browser extension); taking the first dropped every Brave tab. The
+  bucket cache holds a list; an older single-string cache still loads.
+- **Titles lose two more suffixes.** `- Google Chrome for Testing`, and
+  Slack's `- 4 new items` counter, which split one conversation into a dozen
+  topics.
+
+Not done here, because the plugin cannot do it: the terminal title. Ghostty
+shows `omarchy: <directory>` and nothing else; a shell hook that sets the
+title to `<directory>: <running command>` would turn 60% of the day's input
+from one word into the file, tool or test being run. See the README.
+
+**Cost if wrong:** descriptions only — the project decision is untouched, and
+`evaluate` re-measures the whole layer in about 100 seconds.
+
