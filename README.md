@@ -91,6 +91,11 @@ rather than 168.
 - Step through days, or jump back to today
 - Set the break that separates blocks (2/5/10/15 min) from the gear icon;
   changing it reloads the day
+- Toggl is asked for a day's entries once, then the answer is cached — an hour
+  for past days, ten minutes for today, and dropped the moment this panel
+  writes an entry. `^r` refetches both Toggl and ActivityWatch. Toggl meters
+  API requests per plan; when the quota is spent the panel says so (HTTP 402)
+  instead of retrying.
 
 Applying a block creates a completed historical entry carrying the tag
 `omarchy-toggl-track`. That tag is how the Day tab tells an entry it wrote from

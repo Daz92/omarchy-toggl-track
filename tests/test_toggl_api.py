@@ -684,6 +684,22 @@ class TogglApiTests(unittest.TestCase):
     def test_forbidden_does_not_request_token_replacement(self):
         self.assertIn("workspace permissions", toggl_api._http_message(403))
         self.assertNotIn("refresh", toggl_api._http_message(403))
+        # 402 is the plan's request quota, not a transient failure.
+        self.assertIn("quota", toggl_api._http_message(402))
+
+    def test_402_is_not_retried(self):
+        attempts = []
+
+        def opener(request, timeout):
+            attempts.append(request.full_url)
+            raise HTTPError(request.full_url, 402, "Payment Required", {}, io.BytesIO(b""))
+
+        client = toggl_api.TogglClient(token="t", opener=opener, sleep=lambda seconds: None)
+        with self.assertRaises(toggl_api.ApiError) as raised:
+            client.request("GET", "/me/time_entries")
+        self.assertEqual(raised.exception.status, 402)
+        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(len(attempts), 1)
 
     def test_activity_intersects_not_afk_and_discards_idle(self):
         start = "2026-08-19T10:00:00Z"
@@ -1487,6 +1503,26 @@ class ActivityCacheTest(unittest.TestCase):
         self._call(api)
         self.assertIn("/me/time_entries", [call[1] for call in client.calls])
 
+    def test_day_entries_are_fetched_once_per_day_until_forced_or_written(self):
+        # Every day view was one live request; thirty days of evaluate spent a
+        # free plan's whole window (HTTP 402) on 2026-09-14.
+        api, client = self._api()
+        fetches = lambda: sum(1 for call in client.calls if call[1] == "/me/time_entries")
+        self._call(api)
+        self._call(api)
+        self.assertEqual(fetches(), 1)
+        api.day_activity({"workspace_id": 4, "date": self.DATE, "force_refresh": True})
+        self.assertEqual(fetches(), 2)
+        # A second process sees the same cache.
+        again, client2 = self._api()
+        self._call(again)
+        self.assertEqual(sum(1 for call in client2.calls if call[1] == "/me/time_entries"), 0)
+        # Any write to Toggl drops it, so the panel's own entry shows up.
+        again.create_entry = lambda payload: {"entry": {"id": 1}}
+        again.dispatch({"action": "create_entry", "workspace_id": 4})
+        self._call(again)
+        self.assertEqual(sum(1 for call in client2.calls if call[1] == "/me/time_entries"), 1)
+
     def test_non_zero_padded_date_normalizes_and_succeeds(self):
         api, _ = self._api()
         result = api.day_activity({"workspace_id": 4, "date": "2026-8-19", "min_block_minutes": 5})
@@ -2216,6 +2252,39 @@ class LearningHarnessTests(unittest.TestCase):
             out = api.dispatch({"action": "evaluate", "workspace_id": 4, "days": 2})
             self.assertEqual(out["samples"], 0)
             self.assertIn("note", out)
+
+
+    def test_evaluate_fetches_the_whole_range_once_and_stops_on_a_quota_error(self):
+        buckets = [{"id": "windows", "type": "currentwindow"}, {"id": "afk", "type": "afkstatus"}]
+
+        def aw(request, timeout):
+            return Response(buckets if request.full_url.endswith("/buckets/") else [])
+
+        with tempfile.TemporaryDirectory() as root:
+            client = FakeClient([{"data": []}] + [[]] * 40)
+            api = toggl_api.TogglAPI(client, clock=TestClock(), data_root=root, activitywatch_opener=aw)
+            api.dispatch({"action": "evaluate", "workspace_id": 4, "days": 7})
+            # One from sync's own history load, one for the whole evaluated
+            # range -- never one per day.
+            history = [call for call in client.calls if call[1] == "/me/time_entries"]
+            self.assertEqual(len(history), 2)
+            span = history[-1][2]
+            first = datetime.strptime(span["start_date"], "%Y-%m-%d").date()
+            last = datetime.strptime(span["end_date"], "%Y-%m-%d").date()
+            self.assertEqual((last - first).days, 7)
+
+        class QuotaClient(FakeClient):
+            def request(self, method, path, params=None, body=None, mutation=False):
+                if path == "/me/time_entries":
+                    raise toggl_api.ApiError("quota", 402, False)
+                return super().request(method, path, params, body, mutation)
+
+        with tempfile.TemporaryDirectory() as root:
+            api = toggl_api.TogglAPI(QuotaClient([{"data": []}] + [[]] * 40), clock=TestClock(), data_root=root,
+                                     activitywatch_opener=aw)
+            with self.assertRaises(toggl_api.ApiError) as raised:
+                api.dispatch({"action": "evaluate", "workspace_id": 4, "days": 7})
+            self.assertEqual(raised.exception.status, 402)
 
 
 class OwnershipTests(unittest.TestCase):

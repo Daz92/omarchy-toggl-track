@@ -97,6 +97,8 @@ WORKSPACE_TTL = timedelta(minutes=60)
 AW_BUCKETS_TTL = timedelta(hours=24)
 AW_DAY_TTL = timedelta(minutes=10)
 ENTRIES_TTL = timedelta(minutes=60)
+# Actions that write to Toggl; the per-day entries cache is dropped after each.
+_MUTATING_ACTIONS = frozenset(("start", "stop", "update", "continue", "create_entry"))
 CACHE_SCHEMA = "omarchy-toggl-track"
 CACHE_VERSION = 1
 # Measured against the live API on 2026-09-03: a start_date earlier than
@@ -277,6 +279,12 @@ def _http_message(status, body=None):
         return "Toggl rejected the request."
     if status == 401:
         return "Toggl authentication failed; run setup to refresh your token."
+    if status == 402:
+        # Toggl's per-plan API request quota. Free plans get a small fixed
+        # number per window; a 30-day evaluate at one request per day spent a
+        # whole window on 2026-09-14. Not retryable: waiting seconds changes
+        # nothing, and every retry is another request against the quota.
+        return "Toggl API request quota exhausted for this plan; wait for the window to reset."
     if status == 403:
         return "Toggl denied access to the requested workspace. Check your workspace permissions."
     if status == 404:
@@ -1025,6 +1033,11 @@ class _CacheStore:
             name = "awday-%s-%s.json" % (self.account_key, workspace_id)
         elif kind == "entries":
             name = "entries-%s-%d.json" % (self.account_key, workspace_id)
+        elif kind == "dayentries":
+            # workspace_id carries "<workspace>-<ISO date>".
+            if not re.fullmatch(r"\d+-\d{4}-\d{2}-\d{2}", str(workspace_id or "")):
+                raise ValueError("dayentries cache key must be <workspace>-<date>")
+            name = "dayentries-%s-%s.json" % (self.account_key, workspace_id)
         else:
             name = "workspace-%s-%d.json" % (self.account_key, workspace_id)
         return self.root / name
@@ -1036,7 +1049,7 @@ class _CacheStore:
             return None
         if value.get("kind") != kind or value.get("account_key") != self.account_key:
             return None
-        if kind in ("workspace", "awday", "entries") and value.get("workspace_id") != workspace_id:
+        if kind in ("workspace", "awday", "entries", "dayentries") and value.get("workspace_id") != workspace_id:
             return None
         try:
             expiry = _cache_expiry(value.get("expires_at"))
@@ -1086,7 +1099,7 @@ class _CacheStore:
             elif kind in ("awbuckets", "awday"):
                 if not isinstance(value.get("payload"), dict):
                     return None
-            elif kind == "entries":
+            elif kind in ("entries", "dayentries"):
                 if not isinstance(value.get("entries"), list):
                     return None
             elif not self._valid_workspace(value, workspace_id):
@@ -1094,6 +1107,15 @@ class _CacheStore:
             return value, expiry
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return None
+
+    def forget(self, kind):
+        """Drop every file of one kind. Called after a write to Toggl, so the
+        next day view reflects the entry the panel itself just made."""
+        for path in self.root.glob("%s-%s-*.json" % (kind, self.account_key)):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def write(self, kind, value, workspace_id=None):
         path = self._path(kind, workspace_id)
@@ -2041,6 +2063,30 @@ class TogglAPI:
                 return tasks
             page += 1
 
+    def _day_entries(self, workspace_id, date_value, force_refresh=False):
+        """The day's Toggl entries, cached like the day's ActivityWatch events.
+        Every day view used to be one live request; a 30-day walk was thirty,
+        and Toggl's free plan meters requests per window (HTTP 402). Today's
+        entries change under the panel's own writes, so dispatch() forgets this
+        cache after every mutation and today gets the short ActivityWatch TTL."""
+        store = self._store()
+        key = "%d-%s" % (workspace_id, date_value)
+        now = self._now_datetime()
+        if store is not None and not force_refresh:
+            cached = store.load("dayentries", key)
+            if cached is not None and now < cached[1]:
+                return cached[0]["entries"]
+        entries = self._history_entries(workspace_id, date_value, _next_day(date_value))
+        if store is not None:
+            today = _cache_time(self._clock()).astimezone(_local_timezone()).date().isoformat()
+            ttl = AW_DAY_TTL if date_value >= today else ENTRIES_TTL
+            store.write("dayentries", {
+                "schema": CACHE_SCHEMA, "version": CACHE_VERSION, "kind": "dayentries",
+                "account_key": self.client.account_key, "workspace_id": key,
+                "expires_at": _cache_iso(now + ttl), "entries": entries,
+            }, key)
+        return entries
+
     def _history_entries(self, workspace_id, start_date, end_date):
         entries = self.client.request(
             "GET", "/me/time_entries", {"start_date": start_date, "end_date": end_date}
@@ -2448,7 +2494,7 @@ class TogglAPI:
         if isinstance(supplied, list):
             entries = [item for item in supplied if isinstance(item, dict)]
         else:
-            entries = self._history_entries(workspace_id, date_value, _next_day(date_value))
+            entries = self._day_entries(workspace_id, date_value, force_refresh)
         blocks = segment_blocks(
             _clip_activity_events(activity["currentwindow"], start, end),
             _clip_activity_events(activity["afkstatus"], start, end),
@@ -2499,11 +2545,17 @@ class TogglAPI:
         for project in self.sync({"workspace_id": workspace_id}).get("projects", []):
             if project.get("active", True):
                 projects[project["id"]] = project
+        # One request for the whole range, not one per day: thirty days at a
+        # request each is most of a free plan's window (HTTP 402).
+        first = (today - timedelta(days=days - 1)).isoformat()
+        entries = self._history_entries(workspace_id, first, _next_day(today.isoformat()))
         for offset in range(days):
             date_value = (today - timedelta(days=offset)).isoformat()
             try:
-                day = self.day_activity({"workspace_id": workspace_id, "date": date_value})
-            except ApiError:
+                day = self.day_activity({"workspace_id": workspace_id, "date": date_value, "entries": entries})
+            except ApiError as error:
+                if error.status in (401, 402):
+                    raise
                 continue
             by_id = {str(e.get("id")): e for e in day.get("entries", []) if e.get("id") is not None}
             for block in day.get("blocks", []):
@@ -2933,6 +2985,14 @@ class TogglAPI:
         action = payload.get("action")
         if not isinstance(action, str):
             raise ValidationError("action must be a string.")
+        result = self._dispatch_action(action, payload)
+        if action in _MUTATING_ACTIONS:
+            store = self._store()
+            if store is not None:
+                store.forget("dayentries")
+        return result
+
+    def _dispatch_action(self, action, payload):
         if "data" in payload:
             data = _dict(payload["data"], "data")
             merged = dict(data)
