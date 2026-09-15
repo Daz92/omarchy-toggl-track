@@ -30,6 +30,9 @@ if [ "$uninstall" -eq 1 ]; then
         # an item that is already gone.
         secret-tool clear service "$id" account api-token >/dev/null 2>&1 || true
         python3 "$root/toggl_secret.py" delete >/dev/null 2>&1 || true
+        # The classifier services belong to setup, which created them; this
+        # script never touches systemd itself.
+        "$root/setup" --remove-classifier >/dev/null 2>&1 || true
     fi
     if [ -e "$target" ] || [ -L "$target" ]; then
         # Best-effort: must run before the manifest is gone, and a disable
@@ -42,11 +45,6 @@ if [ "$uninstall" -eq 1 ]; then
         printf 'Nothing installed at %s\n' "$target" >&2
     fi
     if [ "$purge" -eq 1 ]; then
-        systemctl --user disable --now omarchy-toggl-track-llama-server.service >/dev/null 2>&1 || true
-        systemctl --user disable --now omarchy-toggl-track-embedder.service >/dev/null 2>&1 || true
-        rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omarchy-toggl-track-llama-server.service"
-        rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omarchy-toggl-track-embedder.service"
-        systemctl --user daemon-reload >/dev/null 2>&1 || true
         rm -rf -- "${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-toggl-track"
         rm -rf -- "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-toggl-track"
         printf 'Purged the stored token, the cache, the model and the classifier service.\n' >&2

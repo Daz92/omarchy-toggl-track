@@ -18,3 +18,9 @@ docs/images/full-*.png
 .claude/
 .mcp.json
 .ignore
+
+# Agent instructions live on the private master branch only. The marketplace
+# installs the whole clone of main, and a coding agent opened in the plugin
+# directory would read a root AGENTS.md as its own instructions. Listed here
+# so a checkout of main can keep an untracked copy without git offering it.
+/AGENTS.md

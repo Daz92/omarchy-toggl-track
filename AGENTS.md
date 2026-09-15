@@ -432,3 +432,20 @@ verified by size and SHA-256 before use.
 installs `aw-server-rust.service` and `aw-awatcher.service` under the same
 names; two servers on port 5600 is a worse outcome than one of them being a
 version behind.
+
+## Publishing: master is private, main is the marketplace tree
+
+`omarchy plugin add` is `git clone` + `mv`: whatever is on `main` is what lands
+in `~/.config/omarchy/plugins/daz.toggl-track/`, and a coding agent opened there
+would read this file as its own instructions. The marketplace reviewer blocked
+the listing on exactly that (omacom/omarchy-plugin-marketplace#5133), so:
+
+- **`master`** carries this file and is never pushed. Develop here.
+- **`main`** is `master` minus `AGENTS.md`, and is what `origin` sees.
+
+Publish with `git checkout main && git merge master`. When this file changed
+on master since the last merge, git reports a modify/delete conflict on
+`AGENTS.md`; resolve it with `git rm AGENTS.md`, then commit and push. Never
+`git push origin master`. `/AGENTS.md` is in `.gitignore` so a checkout of
+`main` can hold an untracked copy for the agents working there.
+

@@ -6,6 +6,7 @@ update_runtime=0
 skip_classifier=0; with_classifier=0
 check_only=0; secure_keyring=0; plain_keyring=0; unlock_only=0; offline=0
 with_activitywatch=0; skip_activitywatch=0
+remove_classifier=0
 usage() {
     cat >&2 <<'USAGE'
 usage: setup [--reset] [--skip-classifier | --classifier | --update-runtime]
@@ -15,6 +16,7 @@ usage: setup [--reset] [--skip-classifier | --classifier | --update-runtime]
        setup --unlock                unlock the protected keyring for this session
        setup --activitywatch         install the ActivityWatch the Day scope needs
        setup --skip-activitywatch    do not offer it
+       setup --remove-classifier     stop, disable and delete the two classifier units
 USAGE
     exit 2
 }
@@ -31,6 +33,7 @@ for argument in "$@"; do
         --unlock) unlock_only=1 ;;
         --activitywatch) with_activitywatch=1 ;;
         --skip-activitywatch) skip_activitywatch=1 ;;
+        --remove-classifier) remove_classifier=1 ;;
         *) usage ;;
     esac
 done
@@ -428,6 +431,23 @@ WantedBy=default.target
 EOF
     systemctl --user daemon-reload
     printf 'Installed the systemd --user unit: %s\n' "$SYSTEMD_UNIT_DIR/$SYSTEMD_UNIT_NAME" >&2
+}
+
+# The inverse of the two _install_unit functions: everything setup put under
+# systemd --user, and nothing else. install --purge calls this so the
+# uninstaller itself never manages a service. Models and the cache stay; they
+# live under $XDG_DATA_HOME / $XDG_CACHE_HOME and the uninstaller removes them.
+remove_classifier_units() {
+    local unit removed=0
+    for unit in "$SYSTEMD_UNIT_NAME" "$EMBED_UNIT_NAME"; do
+        systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+        if [ -e "$SYSTEMD_UNIT_DIR/$unit" ]; then
+            rm -f -- "$SYSTEMD_UNIT_DIR/$unit"
+            removed=$((removed + 1))
+        fi
+    done
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    printf 'Removed %d classifier unit(s) from %s\n' "$removed" "$SYSTEMD_UNIT_DIR" >&2
 }
 
 _classifier_enable_unit() {
@@ -868,6 +888,7 @@ main() {
         python3 "$script_dir/toggl_perf.py"
         return
     fi
+    if [ "$remove_classifier" -eq 1 ]; then remove_classifier_units; return; fi
     if [ "$unlock_only" -eq 1 ]; then keyring_unlock; return; fi
     if [ "$secure_keyring" -eq 1 ]; then keyring_secure; return; fi
     if [ "$plain_keyring" -eq 1 ]; then keyring_plain; return; fi

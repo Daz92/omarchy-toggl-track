@@ -45,7 +45,9 @@ To remove it:
 
 This disables the plugin in the shell, then removes the installed folder or
 symlink. The stored API token and cache are left untouched either way; add
-`--purge` to also clear the token and delete the cache and model directory.
+`--purge` to also clear the token, delete the cache and model directory, and
+have `setup --remove-classifier` stop and delete the two classifier units
+(`setup` is the only script that touches systemd, in both directions).
 What happens to the log differs by install method: it lives inside the
 installed folder itself, so a copy install's plain `--uninstall` deletes it
 along with everything else, while a `--dev` uninstall removes only the symlink
